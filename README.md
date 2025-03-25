@@ -1,32 +1,87 @@
-# glog-action
+# glog-action Composite GitHub Action
 
-i```
-name: glogai-scan
-on:
+`glog-action` is a GitHub Composite Action that enables seamless scanning using Glog.AI. 
+
+
+## Supported Languages
+
+  - C++
+  - Java
+  - JavaScript
+  - Python
+  - Kotlin
+  - PHP
+  - Go
+  - Ruby
+  - Swift
+  - C#
+  - 
+### Other
+
+  - OSS
+  - PHP
+  - Git
+  - Terraform
+
+## Features
+
+ - <b>Integrated Workflow:</b> Easily integrate into your GitHub Actions workflow to automate the security analysis process.
+ - <b>Comprehensive Language Support:</b> Analyze source code in multiple languages to identify potential security vulnerabilities.
+ - <b>SARIF Output:</b> Generates a .sarif file containing the results of the analysis, which can be uploaded to the GitHub Security page for projects utilizing GitHub Advanced Security.
+
+## Usage
+
+ - <b>Setup the GitHub Action:</b> Integrate Glog.AI SAST tool into your repository's build action by including it as a step in your GitHub Actions YAML file.
+ - <b>Run the Analysis:</b> Trigger the action, which will compile your source code and perform the security analysis.
+ - <b>Review the Results:</b> Output is generated in SARIF format. If you are using GitHub Advanced Security, upload the .sarif file to the GitHub Security page to review detailed security findings.
+
+To use this action, include the following configuration in your GitHub Actions workflow:
+
+```yaml
+name: Glog.AI Scan
+
+on: 
   workflow_dispatch:
-  
+
 jobs:
-  glog-scan-ghcr:
+  glog-scan-job:
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Checkout glog-action repository
         uses: actions/checkout@v4
         with:
-           repository: glogai/glog-action
-           token: ${{ secrets.PAT_TOKEN }}
-           path: .github/glog-action
-           ref: main
+          repository: glogai/glog-action
+          token: ${{ secrets.PAT_TOKEN }}
+          path: .github/glog-action
+          ref: main
 
-      - name: Run GlogAI from private repo
+      - name: Run Glog.AI from private repo
         uses: ./.github/glog-action
         with:
-          lang: "python"
+          lang: 'python'
           debug: 'false'
           upload: 'false'
           github-token: ${{ secrets.PAT_TOKEN }}
           glog-token: ${{ secrets.GLOG_TOKEN }}
 ```
 
+### Inputs
+
+&nbsp;&nbsp;&nbsp;&nbsp;lang: The language to scan (e.g., "python"). \
+&nbsp;&nbsp;&nbsp;&nbsp;debug: Enable or disable debug mode ("true"/"false"). \
+&nbsp;&nbsp;&nbsp;&nbsp;upload: Enable or disable uploading results ("true"/"false"). \
+&nbsp;&nbsp;&nbsp;&nbsp;github-token: GitHub Personal Access Token with repository access. \
+&nbsp;&nbsp;&nbsp;&nbsp;glog-token: Token for authenticating with the Glog.AI service. \
+
+### Setup
+
+Secrets: \
+    &nbsp;&nbsp;&nbsp;&nbsp;PAT_TOKEN: Personal Access Token for accessing repositories. \
+    &nbsp;&nbsp;&nbsp;&nbsp;GLOG_TOKEN: Token for interacting with the Glog.AI service.
+
+## Support
+
+For support, open an issue or contact the maintainers at info@glog.ai.
