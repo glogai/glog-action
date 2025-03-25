@@ -72,7 +72,8 @@ runs:
     - name: Git Commit report
       if: env.no_changes == 'false'
       run: |
-          git commit -am "Glog.AI assessment"
+          DATE=$(date +"%Y-%m-%d %H:%M:%S")
+          git commit -am "[$DATE] Glog.AI assessment"
           git push
       shell: bash
 
