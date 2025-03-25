@@ -36,7 +36,12 @@ runs:
       shell: bash
 
     - name: Glog Scan
-      run: ${{ github.action_path }}/glog.sh scan --lang ${{ inputs.lang }} --path $GITHUB_WORKSPACE
+      run: |
+        TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE"
+        if [ ! -z "${{ inputs.lang }}" ]; then
+          TOOL_CMD+=" --lang ${{ inputs.lang }}"
+        fi
+        $TOOL_CMD
       shell: bash
       env:
         GLOG_TOKEN: ${{ inputs.glog-token }}
