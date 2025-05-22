@@ -5,6 +5,9 @@ inputs:
   lang:
     description: "List of languages to scan separated by a comma e.g.: java,c,python"
     required: false
+  ignore:
+    description: "List of directories to be skipped separated by a comma e.g.: dir1,dir2"
+    required: false
   debug:
     description: "Enable debug logging"
     required: false
@@ -40,6 +43,9 @@ runs:
         TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE"
         if [ ! -z "${{ inputs.lang }}" ]; then
           TOOL_CMD+=" --lang ${{ inputs.lang }}"
+        fi
+        if [ ! -z "${{ inputs.ignore }}" ]; then
+          TOOL_CMD+=" --ignore ${{ inputs.ignore }}"
         fi
         $TOOL_CMD
       shell: bash
