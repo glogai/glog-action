@@ -63,6 +63,7 @@ jobs:
         with:
           lang: 'python'
           debug: 'false'
+          client: 'demo'
           upload: 'false'
           github-token: ${{ secrets.PAT_TOKEN }}
           glog-token: ${{ secrets.GLOG_TOKEN }}
@@ -72,6 +73,7 @@ jobs:
 
 &nbsp;&nbsp;&nbsp;&nbsp;lang: The language to scan (e.g., "python"). \
 &nbsp;&nbsp;&nbsp;&nbsp;debug: Enable or disable debug mode ("true"/"false"). \
+&nbsp;&nbsp;&nbsp;&nbsp;client: Client name. \
 &nbsp;&nbsp;&nbsp;&nbsp;upload: Enable or disable uploading results ("true"/"false"). \
 &nbsp;&nbsp;&nbsp;&nbsp;github-token: GitHub Personal Access Token with repository access. \
 &nbsp;&nbsp;&nbsp;&nbsp;glog-token: Token for authenticating with the Glog.AI service. \
