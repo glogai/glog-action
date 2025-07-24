@@ -34,8 +34,9 @@ scan_lang() {
     local lang=$1
     local path=$2
     local ignore=$3
+    local client=$4
     IMAGE_NAME="glog-scan-$lang"
-    docker run --rm -e GLOGSERVICE="$GLOG_TOKEN" -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) -e IGNORE="$ignore" -v "$path":/app "ghcr.io/glogai/$IMAGE_NAME"
+    docker run --rm -e GLOGSERVICE="$GLOG_TOKEN" -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) -e IGNORE="$ignore" -e CLIENT="$client" -v "$path":/app "ghcr.io/glogai/$IMAGE_NAME"
 }
 
 # Parse arguments
@@ -43,6 +44,7 @@ scan_lang() {
 SCAN=false
 LANGUAGES=()
 IGNORE=""
+CLIENT=""
 PROJECT_PATH=$(pwd)
 GLOG_TOKEN=$GLOG_TOKEN
 
@@ -58,6 +60,10 @@ while [[ $# -gt 0 ]]; do
         --lang)
             IFS=',' read -r -a LANGUAGES <<< "$2"
             shift  # Shift to get the value for --lang
+            ;;
+        --client)
+            CLIENT="$2"
+            shift  # Shift to get the value for --client
             ;;
         --glogtoken)
             GLOG_TOKEN="$2"
@@ -94,6 +100,7 @@ if $SCAN; then
     for lang in "${LANGUAGES[@]}"; do
         echo "Analyzing language: $lang"
         echo "Product location: $PROJECT_PATH"
-        scan_lang "$lang" "$PROJECT_PATH" "$IGNORE"
+        echo "Client: $CLIENT"
+        scan_lang "$lang" "$PROJECT_PATH" "$IGNORE" "$CLIENT"
     done
 fi

@@ -5,6 +5,9 @@ inputs:
   lang:
     description: "List of languages to scan separated by a comma e.g.: java,c,python"
     required: false
+  client:
+    description: "Specify client name."
+    required: false
   ignore:
     description: "List of directories to be skipped separated by a comma e.g.: dir1,dir2"
     required: false
@@ -46,6 +49,9 @@ runs:
         fi
         if [ ! -z "${{ inputs.ignore }}" ]; then
           TOOL_CMD+=" --ignore ${{ inputs.ignore }}"
+        fi
+        if [ ! -z "${{ inputs.client }}" ]; then
+          TOOL_CMD+=" --client ${{ inputs.client }}"
         fi
         $TOOL_CMD
       shell: bash
