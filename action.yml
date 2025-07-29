@@ -54,7 +54,7 @@ runs:
         if [ ! -z "${{ inputs.client }}" ]; then
           ARGS+=("--client" "${{ inputs.client }}")
         fi
-        "$TOOL_CMD" "${ARGS[@]}"
+        $TOOL_CMD "${ARGS[@]}"
       shell: bash
       env:
         GLOG_TOKEN: ${{ inputs.glog-token }}
