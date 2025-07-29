@@ -38,22 +38,23 @@ runs:
       shell: bash
 
     - name: Set up auth for pulling private actions
-      run: echo "${{ inputs.github-token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      run: echo "${{ inputs.github-token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       shell: bash
 
     - name: Glog Scan
       run: |
         TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE"
+        ARGS=()
         if [ ! -z "${{ inputs.lang }}" ]; then
-          TOOL_CMD+=" --lang ${{ inputs.lang }}"
+          ARGS+=("--lang" "${{ inputs.lang }}")
         fi
         if [ ! -z "${{ inputs.ignore }}" ]; then
-          TOOL_CMD+=" --ignore ${{ inputs.ignore }}"
+          ARGS+=("--ignore" "${{ inputs.ignore }}")
         fi
         if [ ! -z "${{ inputs.client }}" ]; then
-          TOOL_CMD+=" --client ${{ inputs.client }}"
+          ARGS+=("--client" "${{ inputs.client }}")
         fi
-        $TOOL_CMD
+        "$TOOL_CMD" "${ARGS[@]}"
       shell: bash
       env:
         GLOG_TOKEN: ${{ inputs.glog-token }}
