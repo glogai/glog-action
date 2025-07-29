@@ -38,7 +38,11 @@ runs:
       shell: bash
 
     - name: Set up auth for pulling private actions
-      run: echo "${{ inputs.github-token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_ACTOR: ${{ github.actor }}
+      run: |
+        echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       shell: bash
 
     - name: Glog Scan
@@ -46,13 +50,13 @@ runs:
         TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE"
         ARGS=()
         if [ ! -z "${{ inputs.lang }}" ]; then
-          ARGS+=("--lang" "${{ inputs.lang }}")
+          ARGS+=("--lang" "$(printf '%q' "${{ inputs.lang }}")")
         fi
         if [ ! -z "${{ inputs.ignore }}" ]; then
-          ARGS+=("--ignore" "${{ inputs.ignore }}")
+          ARGS+=("--ignore" "$(printf '%q' "${{ inputs.ignore }}")")
         fi
         if [ ! -z "${{ inputs.client }}" ]; then
-          ARGS+=("--client" "${{ inputs.client }}")
+          ARGS+=("--client" "$(printf '%q' "${{ inputs.client }}")")
         fi
         $TOOL_CMD "${ARGS[@]}"
       shell: bash
