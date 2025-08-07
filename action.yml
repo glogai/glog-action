@@ -47,7 +47,7 @@ runs:
 
     - name: Glog Scan
       run: |
-        TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE" --registry "ghcr.io/glogai/"
+        TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE --registry ghcr.io/glogai/" 
         ARGS=()
         if [ ! -z "${{ inputs.lang }}" ]; then
           ARGS+=("--lang" "$(printf '%q' "${{ inputs.lang }}")")
