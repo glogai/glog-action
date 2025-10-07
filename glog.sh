@@ -56,7 +56,7 @@ scan_lang() {
      echo "$images"
 
     for image_name in "${images[@]}"; do
-      docker run --rm -e GLOGSERVICE="$GLOG_TOKEN" -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) -e IGNORE="$ignore" -e CLIENT="$client" -e GLOG_IMAGE="$image_name" -v "$path":/app "$registry$image_name"
+      docker run --rm -e GLOGSERVICE="$GLOG_TOKEN" -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) -e SARIF_FORMAT_TYPE="GITHUB" -e IGNORE="$ignore" -e CLIENT="$client" -e GLOG_IMAGE="$image_name" -v "$path":/app "$registry$image_name"
     done
 }
 
