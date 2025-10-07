@@ -19,6 +19,10 @@ inputs:
     description: "Upload Glog assessment file to Github Security page"
     required: false
     default: 'true'
+  path:
+    description: Relative path
+    required: false
+    default: '.'
   github-token:
     required: false
   glog-token:
@@ -47,7 +51,7 @@ runs:
 
     - name: Glog Scan
       run: |
-        TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE --registry ghcr.io/glogai/" 
+        TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE/${{ inputs.path }} --registry ghcr.io/glogai/" 
         ARGS=()
         if [ ! -z "${{ inputs.lang }}" ]; then
           ARGS+=("--lang" "$(printf '%q' "${{ inputs.lang }}")")
@@ -67,12 +71,12 @@ runs:
       run: |
         git config --global user.name ${{ github.actor }} 
         git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-        git add $GITHUB_WORKSPACE/.glog/glog-scan.sarif
+        git add $GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.sarif
       shell: bash
 
     - name: Git Add debug log
       if: ${{ inputs.debug == 'true' }}
-      run: git add $GITHUB_WORKSPACE/.glog/glog-scan.log
+      run: git add $GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.log
       shell: bash
       
     - name: Check for staged file changes
