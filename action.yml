@@ -101,5 +101,5 @@ runs:
       if: ${{ inputs.upload == 'true' }}
       uses: github/codeql-action/upload-sarif@v3
       with:
-        sarif_file: .glog/glog-scan.sarif
+        sarif_file: ${{ inputs.path }}/.glog/glog-scan.sarif
         category: Glog.AI
