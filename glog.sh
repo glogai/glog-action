@@ -17,7 +17,7 @@ declare -A IMAGE_MAP=(
   [php]="glog-scan-php-7d88 glog-scan-php-4719"
   [kotlin]="glog-scan-kotlin-d734"
   [resolver]="glog-scan-resolver-fbbb"
-  [javascript]="glog-scan-javascript-d6aa glog-scan-javascript-3cb4"
+  [javascript]="glog-scan-javascript-d6aa glog-scan-javascript-3cb4 glog-scan-javascript-0af1"
 )
 
 # Function to detect programming languages in the project directory
