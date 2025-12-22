@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # Default list of languages
-DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "inventory")
+DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "docker" "inventory")
 
 # Map of languages to image names
 declare -A IMAGE_MAP=(
   [oss]="glog-scan-oss-cc90"
   [java]="glog-scan-java-b608"
   [ruby]="glog-scan-ruby-35d9"
-  [terraform]="glog-scan-terraform-51c8"
+  [terraform]="glog-scan-terraform-51c8 glog-scan-terraform-6b93"
   [cpp]="glog-scan-cpp-c97a"
   [inventory]="glog-scan-inventory-5a5b"
   [python]="glog-scan-python-5f95 glog-scan-python-0386"
@@ -17,7 +17,8 @@ declare -A IMAGE_MAP=(
   [php]="glog-scan-php-7d88 glog-scan-php-4719"
   [kotlin]="glog-scan-kotlin-d734"
   [resolver]="glog-scan-resolver-fbbb"
-  [javascript]="glog-scan-javascript-3cb4 glog-scan-javascript-0af1"
+  [javascript]="glog-scan-javascript-0af1 glog-scan-javascript-3cb4"
+  [docker]="glog-scan-docker-b5ea"
 )
 
 # Function to detect programming languages in the project directory
