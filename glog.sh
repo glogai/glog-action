@@ -48,7 +48,8 @@ scan_lang() {
     local path=$2
     local ignore=$3
     local client=$4
-    local registry=$5
+    local env=$5
+    local registry=$6
     local images=()
 
     # Retrieve images for the specified language
@@ -57,7 +58,7 @@ scan_lang() {
      echo "$images"
 
     for image_name in "${images[@]}"; do
-      docker run --rm -e GLOGSERVICE="$GLOG_TOKEN" -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) -e SARIF_FORMAT_TYPE="GITHUB" -e IGNORE="$ignore" -e CLIENT="$client" -e GLOG_IMAGE="$image_name" -v "$path":/app "$registry$image_name"
+      docker run --rm -e GLOGSERVICE="$GLOG_TOKEN" -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) -e SARIF_FORMAT_TYPE="GITHUB" -e IGNORE="$ignore" -e CLIENT="$client" -e ENV="$env" -e GLOG_IMAGE="$image_name" -v "$path":/app "$registry$image_name"
     done
 }
 
@@ -66,6 +67,7 @@ SCAN=false
 LANGUAGES=()
 IGNORE=""
 CLIENT=""
+ENV=""
 REGISTRY=""
 PROJECT_PATH=$(pwd)
 GLOG_TOKEN=$GLOG_TOKEN
@@ -85,6 +87,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --client)
             CLIENT="$2"
+            shift
+            ;;
+        --env)
+            ENV="$2"
             shift
             ;;
         --glogtoken)
@@ -123,6 +129,7 @@ if $SCAN; then
       echo "Analyzing language: $lang"
       echo "Product location: $PROJECT_PATH"
       echo "Client: $CLIENT"
-      scan_lang "$lang" "$PROJECT_PATH" "$IGNORE" "$CLIENT" "$REGISTRY"
+      echo "Env: $ENV"
+      scan_lang "$lang" "$PROJECT_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY"
   done
 fi
