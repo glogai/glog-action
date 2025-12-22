@@ -38,6 +38,10 @@ detect_languages() {
       tf)                 languages["terraform"]=1 ;;
       git)                languages["git"]=1 ;;
     esac
+    # Detect Dockerfiles by filename pattern
+    case "$(basename "$file")" in
+      Dockerfile|Dockerfile.*|*.dockerfile)  languages["docker"]=1 ;;
+    esac
   done
   echo "${!languages[@]}"
 }
