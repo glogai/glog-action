@@ -8,6 +8,9 @@ inputs:
   client:
     description: "Specify client name."
     required: false
+  env:
+    description: "Specify environment name like: 'dev' for https://<client>.dev.glog.ai. Default is none: https://<client>.glog.ai"
+    required: false
   ignore:
     description: "List of directories to be skipped separated by a comma e.g.: dir1,dir2"
     required: false
@@ -61,6 +64,9 @@ runs:
         fi
         if [ ! -z "${{ inputs.client }}" ]; then
           ARGS+=("--client" "$(printf '%q' "${{ inputs.client }}")")
+        fi
+        if [ ! -z "${{ inputs.env }}" ]; then
+          ARGS+=("--env" "$(printf '%q' "${{ inputs.env }}")")
         fi
         $TOOL_CMD "${ARGS[@]}"
       shell: bash
