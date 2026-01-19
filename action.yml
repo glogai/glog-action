@@ -1,7 +1,6 @@
 name: "Glog Scan Action"
 description: "Scan source code and provide remediation advice for fixing only the real issues"
 author: "Glog.AI"
-
 inputs:
   lang:
     description: "List of languages to scan separated by a comma e.g.: java,c,python"
@@ -18,121 +17,91 @@ inputs:
   debug:
     description: "Enable debug logging"
     required: false
-    default: "false"
+    default: 'false'
   upload:
     description: "Upload Glog assessment file to Github Security page"
     required: false
-    default: "true"
+    default: 'true'
   path:
-    description: "Relative path"
+    description: Relative path
     required: false
-    default: "."
+    default: '.'
   github-token:
     required: false
   glog-token:
     required: true
-
 runs:
   using: "composite"
   steps:
     - name: Clean .glog directory
-      shell: bash
       run: |
         echo "Checking .glog directory..."
         if [ -d "$GITHUB_WORKSPACE/.glog" ]; then
           echo ".glog directory exists. Cleaning up..."
-          rm -rf "$GITHUB_WORKSPACE/.glog/"*
+          rm -rf "$GITHUB_WORKSPACE/.glog/*"
         else
           echo "$GITHUB_WORKSPACE .glog directory does not exist."
         fi
-
-    - name: GHCR login (temporary DOCKER_CONFIG)
       shell: bash
+
+    - name: Set up auth for pulling private actions
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         GITHUB_ACTOR: ${{ github.actor }}
-        DOCKER_CONFIG: ${{ runner.temp }}/docker-config
       run: |
-        set -euo pipefail
-
-        if [ -z "${GITHUB_TOKEN:-}" ]; then
-          echo "inputs.github-token is empty. Skipping GHCR login."
-          exit 0
-        fi
-
-        mkdir -p "$DOCKER_CONFIG"
         echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      shell: bash
 
     - name: Glog Scan
+      run: |
+        TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE/${{ inputs.path }} --registry ghcr.io/glogai/" 
+        ARGS=()
+        if [ ! -z "${{ inputs.lang }}" ]; then
+          ARGS+=("--lang" "$(printf '%q' "${{ inputs.lang }}")")
+        fi
+        if [ ! -z "${{ inputs.ignore }}" ]; then
+          ARGS+=("--ignore" "$(printf '%q' "${{ inputs.ignore }}")")
+        fi
+        if [ ! -z "${{ inputs.client }}" ]; then
+          ARGS+=("--client" "$(printf '%q' "${{ inputs.client }}")")
+        fi
+        if [ ! -z "${{ inputs.env }}" ]; then
+          ARGS+=("--env" "$(printf '%q' "${{ inputs.env }}")")
+        fi
+        $TOOL_CMD "${ARGS[@]}"
       shell: bash
       env:
         GLOG_TOKEN: ${{ inputs.glog-token }}
-      run: |
-        set -euo pipefail
-
-        TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE/${{ inputs.path }} --registry ghcr.io/glogai/"
-        ARGS=()
-
-        if [ -n "${{ inputs.lang }}" ]; then
-          ARGS+=("--lang" "${{ inputs.lang }}")
-        fi
-        if [ -n "${{ inputs.ignore }}" ]; then
-          ARGS+=("--ignore" "${{ inputs.ignore }}")
-        fi
-        if [ -n "${{ inputs.client }}" ]; then
-          ARGS+=("--client" "${{ inputs.client }}")
-        fi
-        if [ -n "${{ inputs.env }}" ]; then
-          ARGS+=("--env" "${{ inputs.env }}")
-        fi
-
-        $TOOL_CMD "${ARGS[@]}"
-
-    - name: Docker logout + cleanup (always)
-      if: always()
-      shell: bash
-      env:
-        DOCKER_CONFIG: ${{ runner.temp }}/docker-config
-      run: |
-        set +e
-        docker logout ghcr.io
-        rm -rf "$DOCKER_CONFIG"
 
     - name: Git Add report
-      shell: bash
       run: |
-        set -euo pipefail
-        git config --global user.name "${{ github.actor }}"
+        git config --global user.name ${{ github.actor }} 
         git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-        git add "$GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.sarif"
+        git add $GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.sarif
+      shell: bash
 
     - name: Git Add debug log
       if: ${{ inputs.debug == 'true' }}
+      run: git add $GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.log
       shell: bash
-      run: |
-        set -euo pipefail
-        git add "$GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.log"
 
     - name: Check for staged file changes
       id: check_staged_changes
-      shell: bash
       run: |
-        set -euo pipefail
         if git diff --staged --quiet; then
-          echo "no_changes=true" >> "$GITHUB_ENV"
+          echo "no_changes=true" >> $GITHUB_ENV
         else
-          echo "no_changes=false" >> "$GITHUB_ENV"
+          echo "no_changes=false" >> $GITHUB_ENV
         fi
+      shell: bash
 
     - name: Git Commit report
       if: env.no_changes == 'false'
-      shell: bash
       run: |
-        set -euo pipefail
-        DATE=$(date +"%Y-%m-%d %H:%M:%S")
-        # commit staged changes (safer than `-am`)
-        git commit -m "[$DATE] Glog.AI assessment"
-        git push
+          DATE=$(date +"%Y-%m-%d %H:%M:%S")
+          git commit -am "[$DATE] Glog.AI assessment"
+          git push
+      shell: bash
 
     - name: Upload report
       if: ${{ inputs.upload == 'true' }}
