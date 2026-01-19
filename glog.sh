@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Default list of languages
 DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "docker" "inventory")
@@ -21,11 +22,32 @@ declare -A IMAGE_MAP=(
   [docker]="glog-scan-docker-b5ea"
 )
 
-# Function to detect programming languages in the project directory
+usage() {
+  cat <<'EOF'
+Usage:
+  glog.sh [clean] [scan] [options]
+
+Commands (can be combined and will run in the order provided):
+  clean    Clean PATH/.glog directory contents
+  scan     Run scanners
+
+Options:
+  --path PATH                Project/workspace path (default: pwd)
+  --lang l1,l2               Languages list (default: auto-detect)
+  --client CLIENT
+  --env ENV
+  --glogtoken TOKEN
+  --ignore PATTERN
+  --registry REGISTRY_PREFIX (example: "ghcr.io/glogai/")
+  --sarif-format-type TYPE   Default: GITHUB
+EOF
+}
+
 detect_languages() {
   local project_dir="$1"
-  local -A languages
-  for file in $(find "$project_dir" -type f); do
+  local -A languages=()
+
+  while IFS= read -r -d '' file; do
     case "${file##*.}" in
       c|cpp|h|hpp)        languages["cpp"]=1 ;;
       java|class)         languages["java"]=1 ;;
@@ -38,102 +60,157 @@ detect_languages() {
       tf)                 languages["terraform"]=1 ;;
       git)                languages["git"]=1 ;;
     esac
-    # Detect Dockerfiles by filename pattern
+
     case "$(basename "$file")" in
       Dockerfile|Dockerfile.*|*.dockerfile)  languages["docker"]=1 ;;
     esac
-  done
+  done < <(find "$project_dir" -type f -print0)
+
   echo "${!languages[@]}"
 }
 
-# Function to scan language and path
-scan_lang() {
-    local lang=$1
-    local path=$2
-    local ignore=$3
-    local client=$4
-    local env=$5
-    local registry=$6
-    local images=()
+clean_glog() {
+  local workspace="$1"
 
-    # Retrieve images for the specified language
-    image_list=${IMAGE_MAP[$lang]}
-    images=($image_list)
-     echo "$images"
-
-    for image_name in "${images[@]}"; do
-      docker run --rm -e GLOGSERVICE="$GLOG_TOKEN" -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) -e SARIF_FORMAT_TYPE="GITHUB" -e IGNORE="$ignore" -e CLIENT="$client" -e ENV="$env" -e GLOG_IMAGE="$image_name" -v "$path":/app "$registry$image_name"
-    done
+  echo "Checking .glog directory..."
+  if [ -d "$workspace/.glog" ]; then
+    echo ".glog directory exists. Cleaning up..."
+    # Removes everything inside .glog (including hidden files)
+    find "$workspace/.glog" -mindepth 1 -exec rm -rf {} +
+  else
+    echo "$workspace .glog directory does not exist."
+  fi
 }
 
-# Parse arguments
-SCAN=false
+scan_lang() {
+  local lang=$1
+  local path=$2
+  local ignore=$3
+  local client=$4
+  local env=$5
+  local registry=$6
+  local sarif_format_type=$7
+
+  local image_list="${IMAGE_MAP[$lang]:-}"
+  if [[ -z "$image_list" ]]; then
+    echo "No images configured for language: $lang (skipping)"
+    return 0
+  fi
+
+  local images=($image_list)
+
+  for image_name in "${images[@]}"; do
+    docker run --rm \
+      -e GLOGSERVICE="${GLOG_TOKEN}" \
+      -e HOST_UID="$(id -u)" \
+      -e HOST_GID="$(id -g)" \
+      -e SARIF_FORMAT_TYPE="$sarif_format_type" \
+      -e IGNORE="$ignore" \
+      -e CLIENT="$client" \
+      -e ENV="$env" \
+      -e GLOG_IMAGE="$image_name" \
+      -v "$path":/app \
+      "${registry}${image_name}"
+  done
+}
+
+# -----------------------
+# Defaults
+# -----------------------
+COMMANDS=()
+
 LANGUAGES=()
 IGNORE=""
 CLIENT=""
 ENV=""
 REGISTRY=""
-PROJECT_PATH=$(pwd)
-GLOG_TOKEN=$GLOG_TOKEN
+PROJECT_PATH="$(pwd)"
+GLOG_TOKEN="${GLOG_TOKEN:-}"
+SARIF_FORMAT_TYPE="GITHUB"
 
+# -----------------------
+# Parse args (commands can be mixed: clean scan ...)
+# -----------------------
 while [[ $# -gt 0 ]]; do
-    case $1 in
-        scan)
-            SCAN=true
-            ;;
-        --path)
-            PROJECT_PATH="$2"
-            shift
-            ;;
-        --lang)
-            IFS=',' read -r -a LANGUAGES <<< "$2"
-            shift
-            ;;
-        --client)
-            CLIENT="$2"
-            shift
-            ;;
-        --env)
-            ENV="$2"
-            shift
-            ;;
-        --glogtoken)
-            GLOG_TOKEN="$2"
-            shift
-            ;;
-        --ignore)
-            IGNORE="$2"
-            shift
-            ;;
-        --registry)
-            REGISTRY="$2"
-            shift
-            ;;
-        *)
-            echo "Invalid option: $1"
-            exit 1
-            ;;
-    esac
-    shift
+  case "$1" in
+    clean|scan)
+      COMMANDS+=("$1")
+      ;;
+    --path)
+      PROJECT_PATH="$2"
+      shift
+      ;;
+    --lang)
+      IFS=',' read -r -a LANGUAGES <<< "$2"
+      shift
+      ;;
+    --client)
+      CLIENT="$2"
+      shift
+      ;;
+    --env)
+      ENV="$2"
+      shift
+      ;;
+    --glogtoken)
+      GLOG_TOKEN="$2"
+      shift
+      ;;
+    --ignore)
+      IGNORE="$2"
+      shift
+      ;;
+    --registry)
+      REGISTRY="$2"
+      shift
+      ;;
+    --sarif-format-type)
+      SARIF_FORMAT_TYPE="$2"
+      shift
+      ;;
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Invalid option/command: $1"
+      usage
+      exit 1
+      ;;
+  esac
+  shift
 done
 
-### Detect languages ###################################
-if $SCAN; then
-  if [ ${#LANGUAGES[@]} -eq 0 ]; then
-    LANGUAGES=($(detect_languages "$PROJECT_PATH"))
-  fi
+if [[ ${#COMMANDS[@]} -eq 0 ]]; then
+  usage
+  exit 1
 fi
 
-LANGUAGES+=('resolver')
+# -----------------------
+# Execute commands in order given
+# -----------------------
+for cmd in "${COMMANDS[@]}"; do
+  case "$cmd" in
+    clean)
+      clean_glog "$PROJECT_PATH"
+      ;;
+    scan)
+      if [[ ${#LANGUAGES[@]} -eq 0 ]]; then
+        # shellcheck disable=SC2207
+        LANGUAGES=($(detect_languages "$PROJECT_PATH"))
+      fi
 
-########################################################
+      # Always add resolver
+      LANGUAGES+=('resolver')
 
-if $SCAN; then
-  for lang in "${LANGUAGES[@]}"; do
-      echo "Analyzing language: $lang"
-      echo "Product location: $PROJECT_PATH"
-      echo "Client: $CLIENT"
-      echo "Env: $ENV"
-      scan_lang "$lang" "$PROJECT_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY"
-  done
-fi
+      for lang in "${LANGUAGES[@]}"; do
+        echo "Analyzing language: $lang"
+        echo "Product location: $PROJECT_PATH"
+        echo "Client: $CLIENT"
+        echo "Env: $ENV"
+        echo "SARIF_FORMAT_TYPE: $SARIF_FORMAT_TYPE"
+        scan_lang "$lang" "$PROJECT_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE"
+      done
+      ;;
+  esac
+done
