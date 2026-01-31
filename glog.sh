@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Default list of languages
-DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "docker" "inventory")
+DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "docker" "inventory" "objectscript")
 
 # Map of languages to image names
 declare -A IMAGE_MAP=(
