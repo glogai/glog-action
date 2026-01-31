@@ -19,7 +19,8 @@ declare -A IMAGE_MAP=(
   [kotlin]="glog-scan-kotlin-d734"
   [resolver]="glog-scan-resolver-fbbb"
   [javascript]="glog-scan-javascript-0af1 glog-scan-javascript-3cb4"
-  [docker]="glog-scan-docker-b5ea"
+  [docker]="glog-scan-docker-b5ea",
+  [objectscript]="glog-scan-objectscript-b977"
 )
 
 usage() {
@@ -59,6 +60,7 @@ detect_languages() {
       cs)                 languages["csharp"]=1 ;;
       tf)                 languages["terraform"]=1 ;;
       git)                languages["git"]=1 ;;
+      objectscript)       languages["cls"]=1 ;;
     esac
 
     case "$(basename "$file")" in
