@@ -299,7 +299,7 @@ runs:
             .map(n => Number(n))
             .filter(n => Number.isFinite(n));
 
-          const MAX_ASSIGN = 30;
+          const MAX_ASSIGN = 70;
           const toAssign = issueNumbers.slice(0, MAX_ASSIGN);
 
           const { data: repo } = await github.rest.repos.get({
