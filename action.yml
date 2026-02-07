@@ -204,21 +204,6 @@ runs:
             const fp = pickFingerprint(r) ?? `${r.ruleId}:${uri}:${startLine}:${startCol}`;
             const marker = `glog-fingerprint: ${fp}`;
 
-            const fixes = r.fixes ?? [];
-            const fixText = fixes.length
-              ? fixes.map((f, i) => {
-                  const rep = f.artifactChanges?.[0]?.replacements?.[0];
-                  const del = rep?.deletedRegion;
-                  const ins = rep?.insertedContent?.text;
-                  return [
-                    `### Fix option ${i + 1}`,
-                    `**Description:** ${f.description?.text ?? "(none)"}`,
-                    del ? `**DeletedRegion:** charOffset=${del.charOffset}, charLength=${del.charLength}` : "",
-                    ins ? `**InsertedContent:** \`${ins}\`` : "",
-                  ].filter(Boolean).join("\n");
-                }).join("\n\n")
-              : "(No SARIF fixes[] provided)";
-
             const helpMd = rule?.help?.markdown ?? "(No remediation markdown in rule)";
 
             const body = [
@@ -245,9 +230,6 @@ runs:
               ``,
               `## Remediation (rule help.markdown)`,
               helpMd,
-              ``,
-              `## Fix suggestions (SARIF fixes[])`,
-              fixText,
               ``,
               `## Acceptance criteria`,
               `- Apply a **safe and minimal fix** that resolves the finding without changing existing behavior.`,
