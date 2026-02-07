@@ -159,7 +159,6 @@ runs:
             const { data } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              state: "open",
               labels: "sarif",
               per_page: 100,
               page
