@@ -38,6 +38,14 @@ inputs:
     description: Automatically create PR for the issues found. Default is false.
     required: false
     default: false
+  max-issues:
+    description: Maximum number of SARIF findings to convert into GitHub issues per run. Default is 30.
+    required: false
+    default: "30"
+  max-assign:
+    description: Maximum number of created issues to assign to Copilot for autofix. Default is 30.
+    required: false
+    default: "30"
 runs:
   using: "composite"
   steps:
@@ -160,6 +168,7 @@ runs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               labels: "sarif",
+              state: "all", 
               per_page: 100,
               page
             });
@@ -179,7 +188,7 @@ runs:
 
           core.info(`Loaded ${existingByFingerprint.size} existing issues with fingerprints.`);
 
-          const MAX_ISSUES = 70;
+          const MAX_ISSUES = Number(inputs.max-issues || "30");
           const created = [];
           let createdCount = 0;
 
@@ -247,17 +256,22 @@ runs:
 
             const title = `[Glog] ${message} (${uri}:${startLine})`;
 
-            const existingIssueNumber = existingByFingerprint.get(fp);
+            const existing = existingByFingerprint.get(fp);
 
-            if (existingIssueNumber) {
+            if (existing) {
+              if (existing.state === "closed") {
+                core.info(`Skipping fingerprint ${fp} because issue #${existing.number} is closed (marked as not a vuln).`);
+                continue;
+              }
+              
               await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: existingIssueNumber,
+                issue_number: existing.number,
                 title,
                 body
               });
-              core.info(`Updated existing issue #${existingIssueNumber} for fingerprint ${fp}`);
+              core.info(`Updated existing issue #${existing.number} for fingerprint ${fp}`);
               continue;
             }
 
@@ -298,7 +312,7 @@ runs:
             .map(n => Number(n))
             .filter(n => Number.isFinite(n));
 
-          const MAX_ASSIGN = 70;
+          const MAX_ASSIGN = Number(inputs.max-assign || "30");;
           const toAssign = issueNumbers.slice(0, MAX_ASSIGN);
 
           const { data: repo } = await github.rest.repos.get({
