@@ -130,6 +130,9 @@ runs:
       if: ${{ inputs.issue == 'true' }}
       id: upload-issues
       uses: actions/github-script@v7
+      env:
+        SARIF_PATH: ${{ github.workspace }}/${{ inputs.path }}/.glog/glog-scan.sarif
+        MAX_ISSUES_NUMBER: ${{ inputs.max-issues }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -188,7 +191,7 @@ runs:
 
           core.info(`Loaded ${existingByFingerprint.size} existing issues with fingerprints.`);
 
-          const MAX_ISSUES = Number(inputs.max-issues || "30");
+          const MAX_ISSUES = process.env.MAX_ISSUES_NUMBER;
           const created = [];
           let createdCount = 0;
 
@@ -289,12 +292,12 @@ runs:
           }
 
           core.setOutput("created", created.join(","));
-      env:
-        SARIF_PATH: ${{ github.workspace }}/${{ inputs.path }}/.glog/glog-scan.sarif
 
     - name: Assign created issues to Copilot (trigger agent)
       if: ${{ inputs.autofix == 'true' && steps.upload-issues.outputs.created != '' }}
       uses: actions/github-script@v7
+      env:
+        MAX_ASSIGN_NUMBER: ${{ inputs.max-assign }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -312,7 +315,7 @@ runs:
             .map(n => Number(n))
             .filter(n => Number.isFinite(n));
 
-          const MAX_ASSIGN = Number(inputs.max-assign || "30");;
+          const MAX_ASSIGN = process.env.MAX_ASSIGN_NUMBER
           const toAssign = issueNumbers.slice(0, MAX_ASSIGN);
 
           const { data: repo } = await github.rest.repos.get({
