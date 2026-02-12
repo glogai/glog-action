@@ -182,7 +182,7 @@ runs:
               if (issue.pull_request) continue;
               const body = issue.body ?? "";
               const m = body.match(fingerprintRegex);
-              if (m) existingByFingerprint.set(m[1], issue.number);
+              if (m) existingByFingerprint.set(m[1], { number: issue.number, state: issue.state });
             }
 
             if (data.length < 100) break;
@@ -191,7 +191,7 @@ runs:
 
           core.info(`Loaded ${existingByFingerprint.size} existing issues with fingerprints.`);
 
-          const MAX_ISSUES = process.env.MAX_ISSUES_NUMBER;
+          const MAX_ISSUES = Number(process.env.MAX_ISSUES_NUMBER || "30");
           const created = [];
           let createdCount = 0;
 
@@ -315,7 +315,7 @@ runs:
             .map(n => Number(n))
             .filter(n => Number.isFinite(n));
 
-          const MAX_ASSIGN = process.env.MAX_ASSIGN_NUMBER
+          const MAX_ASSIGN = Number(process.env.MAX_ASSIGN_NUMBER || "30");
           const toAssign = issueNumbers.slice(0, MAX_ASSIGN);
 
           const { data: repo } = await github.rest.repos.get({
