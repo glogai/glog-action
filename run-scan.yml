@@ -1,0 +1,27 @@
+# run-scan.yml (Master Template)
+parameters:
+  - name: glogToken
+    type: string
+  - name: githubToken
+    type: string
+  - name: githubUser
+    type: string
+  - name: scanPath
+    type: string
+    default: "."
+  - name: client
+    type: string
+    default: ""
+
+steps:
+  - checkout: glogRepo
+    path: s/glog-action
+    displayName: 'Auto-checkout Glog Tools'
+
+  - template: glog-azure-template.yml
+    parameters:
+      glogToken: ${{ parameters.glogToken }}
+      githubToken: ${{ parameters.githubToken }}
+      githubUser: ${{ parameters.githubUser }}
+      scanPath: ${{ parameters.scanPath }}
+      client: ${{ parameters.client }}
