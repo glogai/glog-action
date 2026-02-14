@@ -102,7 +102,7 @@ scan_lang() {
   local images=($image_list)
 
   for image_name in "${images[@]}"; do
-    docker run --rm \
+    docker run --pull=always --rm \
       -e GLOGSERVICE="${GLOG_TOKEN}" \
       -e HOST_UID="$(id -u)" \
       -e HOST_GID="$(id -g)" \
