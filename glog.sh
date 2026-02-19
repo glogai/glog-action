@@ -28,6 +28,7 @@ Usage: glog.sh [clean] [scan] [options]
 
 Options:
   --path PATH               Project path to scan (default: current dir)
+  --lang l1,l2               Languages list (default: auto-detect)
   --client CLIENT           Client identifier for Glog.AI
   --env ENV                 Environment (dev, stage, prod)
   --glogtoken TOKEN         Glog API Token
@@ -53,6 +54,7 @@ detect_languages() {
       cs)                 languages["csharp"]=1 ;;
       tf)                 languages["terraform"]=1 ;;
       cls)                languages["objectscript"]=1 ;;
+      git)                languages["git"]=1 ;;
     esac
 
     case "$(basename "$file")" in
@@ -111,6 +113,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     clean|scan) COMMANDS+=("$1"); shift ;;
     --path) PROJECT_PATH="$2"; shift 2 ;;
+    --lang) IFS=',' read -r -a LANGUAGES <<< "$2"; shift 2 ;;
     --client) CLIENT="$2"; shift 2 ;;
     --env) ENV="$2"; shift 2 ;;
     --glogtoken) GLOG_TOKEN="$2"; shift 2 ;;
