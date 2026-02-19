@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "docker" "inventory" "objectscript")
+DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "inventory" "objectscript") #"docker"
 
 declare -A IMAGE_MAP=(
   [oss]="glog-scan-oss-cc90"
@@ -17,7 +17,7 @@ declare -A IMAGE_MAP=(
   [kotlin]="glog-scan-kotlin-d734"
   [resolver]="glog-scan-resolver-fbbb"
   [javascript]="glog-scan-javascript-0af1 glog-scan-javascript-3cb4"
-  [docker]="glog-scan-docker-b5ea"
+  #[docker]="glog-scan-docker-b5ea"
   [objectscript]="glog-scan-objectscript-b977"
 )
 
@@ -57,9 +57,9 @@ detect_languages() {
       git)                languages["git"]=1 ;;
     esac
 
-    case "$(basename "$file")" in
-      Dockerfile|Dockerfile.*|*.dockerfile)  languages["docker"]=1 ;;
-    esac
+    # case "$(basename "$file")" in
+    #   Dockerfile|Dockerfile.*|*.dockerfile)  languages["docker"]=1 ;;
+    # esac
   done < <(find "$project_dir" -maxdepth 4 -type f -not -path '*/.*' -print0)
 
   echo "${!languages[@]}"
