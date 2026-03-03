@@ -76,7 +76,7 @@ jobs:
 &nbsp;&nbsp;&nbsp;&nbsp;client: Client name. \
 &nbsp;&nbsp;&nbsp;&nbsp;upload: Enable or disable uploading results ("true"/"false"). \
 &nbsp;&nbsp;&nbsp;&nbsp;github-token: GitHub Personal Access Token with repository access. \
-&nbsp;&nbsp;&nbsp;&nbsp;glog-token: Token for authenticating with the Glog.AI service. \
+&nbsp;&nbsp;&nbsp;&nbsp;glog-token: Token for authenticating with the Glog.AI service. 
 
 ### Setup
 
