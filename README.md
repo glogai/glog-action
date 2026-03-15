@@ -65,6 +65,11 @@ jobs:
           debug: 'false'
           client: 'demo'
           upload: 'false'
+          env: 'dev'
+          issue: true
+          autofix: true
+          max-issues: 30
+          max-assign: 30
           github-token: ${{ secrets.PAT_TOKEN }}
           glog-token: ${{ secrets.GLOG_TOKEN }}
 ```
@@ -75,6 +80,11 @@ jobs:
 &nbsp;&nbsp;&nbsp;&nbsp;debug: Enable or disable debug mode ("true"/"false"). \
 &nbsp;&nbsp;&nbsp;&nbsp;client: Client name. \
 &nbsp;&nbsp;&nbsp;&nbsp;upload: Enable or disable uploading results ("true"/"false"). \
+&nbsp;&nbsp;&nbsp;&nbsp;env: Environment name. \
+&nbsp;&nbsp;&nbsp;&nbsp;issue: Enable or disable uploading Glog issues as Github issues. ("true"/"false"). Not required. \
+&nbsp;&nbsp;&nbsp;&nbsp;autofix: Enable or disable automatically create PR for the issues found ("true"/"false"). Not required. \
+&nbsp;&nbsp;&nbsp;&nbsp;max-issues: Maximum number of SARIF findings to convert into GitHub issues per run. Not required. \
+&nbsp;&nbsp;&nbsp;&nbsp;max-assign: Maximum number of created issues to assign to Copilot for autofix. Not required. \
 &nbsp;&nbsp;&nbsp;&nbsp;github-token: GitHub Personal Access Token with repository access. \
 &nbsp;&nbsp;&nbsp;&nbsp;glog-token: Token for authenticating with the Glog.AI service. 
 
