@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "inventory" "objectscript") #"docker"
+DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "inventory" "objectscript" "go") #"docker"
 
 declare -A IMAGE_MAP=(
   [oss]="glog-scan-oss-cc90"
@@ -19,6 +19,7 @@ declare -A IMAGE_MAP=(
   [javascript]="glog-scan-javascript-0af1 glog-scan-javascript-3cb4"
   #[docker]="glog-scan-docker-b5ea"
   [objectscript]="glog-scan-objectscript-b977"
+  [go]="glog-scan-go-cb38 glog-scan-go-c6d3"
 )
 
 usage() {
@@ -55,6 +56,8 @@ detect_languages() {
       tf)                 languages["terraform"]=1 ;;
       cls)                languages["objectscript"]=1 ;;
       git)                languages["git"]=1 ;;
+      objectscript)       languages["cls"]=1 ;;
+      go)                 languages["go"]=1 ;;
     esac
 
     # case "$(basename "$file")" in
