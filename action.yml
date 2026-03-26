@@ -129,7 +129,7 @@ runs:
     - name: Create / update issues from SARIF (dedupe by fingerprint)
       if: ${{ inputs.issue == 'true' }}
       id: upload-issues
-      uses: actions/github-script@v7
+      uses: actions/github-script@v8
       env:
         SARIF_PATH: ${{ github.workspace }}/${{ inputs.path }}/.glog/glog-scan.sarif
         MAX_ISSUES_NUMBER: ${{ inputs.max-issues }}
@@ -295,7 +295,7 @@ runs:
 
     - name: Assign created issues to Copilot (trigger agent)
       if: ${{ inputs.autofix == 'true' && steps.upload-issues.outputs.created != '' }}
-      uses: actions/github-script@v7
+      uses: actions/github-script@v8
       env:
         MAX_ASSIGN_NUMBER: ${{ inputs.max-assign }}
       with:
