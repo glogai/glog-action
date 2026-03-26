@@ -48,10 +48,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Checkout glog-action repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: glogai/glog-action
           token: ${{ secrets.PAT_TOKEN }}
