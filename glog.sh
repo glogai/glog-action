@@ -47,6 +47,24 @@ cleanup() {
 
 trap cleanup EXIT
 
+persist_scoped_scan_artifacts() {
+  local scan_path="$1"
+  local project_path="$2"
+
+  if [[ "$scan_path" == "$project_path" ]]; then
+    return
+  fi
+
+  if [[ ! -d "$scan_path/.glog" ]]; then
+    echo "No .glog artifacts found in scoped scan directory."
+    return
+  fi
+
+  mkdir -p "$project_path/.glog"
+  cp -a "$scan_path/.glog/." "$project_path/.glog/"
+  echo "Persisted scoped scan artifacts to $project_path/.glog"
+}
+
 detect_languages() {
   local project_dir="$1"
   local -A languages=()
@@ -209,6 +227,8 @@ for cmd in "${COMMANDS[@]}"; do
         echo "Analyzing language: $lang"
         scan_lang "$lang" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE"
       done
+
+      persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
       ;;
   esac
 done

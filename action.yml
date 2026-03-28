@@ -57,7 +57,7 @@ runs:
         echo "Checking .glog directory..."
         if [ -d "$GITHUB_WORKSPACE/.glog" ]; then
           echo ".glog directory exists. Cleaning up..."
-          rm -rf "$GITHUB_WORKSPACE/.glog/*"
+          rm -rf "$GITHUB_WORKSPACE/.glog/"*
         else
           echo "$GITHUB_WORKSPACE .glog directory does not exist."
         fi
