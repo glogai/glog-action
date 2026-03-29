@@ -36,7 +36,34 @@ Options:
   --registry REGISTRY       Docker registry prefix (default: ghcr.io/glogai/)
   --ignore PATTERN          Patterns to ignore
   --sarif-format-type TYPE   Default: GITHUB
+  --files FILE1,FILE2      Comma-separated list of files to scan relative to --path
 EOF
+}
+
+cleanup() {
+  if [[ -n "${TEMP_SCAN_DIR:-}" && -d "${TEMP_SCAN_DIR:-}" ]]; then
+    rm -rf "$TEMP_SCAN_DIR"
+  fi
+}
+
+trap cleanup EXIT
+
+persist_scoped_scan_artifacts() {
+  local scan_path="$1"
+  local project_path="$2"
+
+  if [[ "$scan_path" == "$project_path" ]]; then
+    return
+  fi
+
+  if [[ ! -d "$scan_path/.glog" ]]; then
+    echo "No .glog artifacts found in scoped scan directory."
+    return
+  fi
+
+  mkdir -p "$project_path/.glog"
+  cp -a "$scan_path/.glog/." "$project_path/.glog/"
+  echo "Persisted scoped scan artifacts to $project_path/.glog"
 }
 
 detect_languages() {
@@ -67,6 +94,47 @@ detect_languages() {
 
   echo "${!languages[@]}"
 }
+
+prepare_scoped_files_dir() {
+  local project_dir="$1"
+  shift
+  local input_files=("$@")
+
+  TEMP_SCAN_DIR="$(mktemp -d)"
+  local trimmed_file=""
+  local src=""
+  local dest=""
+  local rel=""
+
+  for file in "${input_files[@]}"; do
+    trimmed_file="$(echo "$file" | xargs)"
+
+    if [[ -z "$trimmed_file" ]]; then
+      continue
+    fi
+
+    case "$trimmed_file" in
+      /*|../*|*/../*|*"/.."|*"../"*)
+        echo "Invalid file path: $trimmed_file"
+        exit 1
+        ;;
+    esac
+
+    src="$project_dir/$trimmed_file"
+
+    if [[ ! -f "$src" ]]; then
+      echo "File not found: $trimmed_file"
+      exit 1
+    fi
+
+    dest="$TEMP_SCAN_DIR/$trimmed_file"
+    mkdir -p "$(dirname "$dest")"
+    cp "$src" "$dest"
+  done
+
+  echo "$TEMP_SCAN_DIR"
+}
+
 
 scan_lang() {
   local lang=$1
@@ -110,12 +178,14 @@ REGISTRY="ghcr.io/glogai/"
 PROJECT_PATH="$(pwd)"
 GLOG_TOKEN="${GLOG_TOKEN:-}"
 SARIF_FORMAT_TYPE="${SARIF_FORMAT_TYPE:-GITHUB}"
-
+FILES=()
+TEMP_SCAN_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     clean|scan) COMMANDS+=("$1"); shift ;;
     --path) PROJECT_PATH="$2"; shift 2 ;;
+    --files) IFS=',' read -r -a FILES <<< "$2"; shift 2 ;;
     --lang) IFS=',' read -r -a LANGUAGES <<< "$2"; shift 2 ;;
     --client) CLIENT="$2"; shift 2 ;;
     --env) ENV="$2"; shift 2 ;;
@@ -141,17 +211,27 @@ for cmd in "${COMMANDS[@]}"; do
       fi
       ;;
     scan)
+      SCAN_PATH="$PROJECT_PATH"
+
+      if [[ ${#FILES[@]} -gt 0 ]]; then
+        echo "Preparing scoped scan for selected files..."
+        SCAN_PATH="$(prepare_scoped_files_dir "$PROJECT_PATH" "${FILES[@]}")"
+        echo "Scoped scan directory: $SCAN_PATH"
+      fi
+
       if [[ ${#LANGUAGES[@]} -eq 0 ]]; then
         # shellcheck disable=SC2207
-        LANGUAGES=($(detect_languages "$PROJECT_PATH"))
+        LANGUAGES=($(detect_languages "$SCAN_PATH"))
       fi
 
       LANGUAGES+=('resolver')
 
       for lang in "${LANGUAGES[@]}"; do
         echo "Analyzing language: $lang"
-        scan_lang "$lang" "$PROJECT_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE"
+        scan_lang "$lang" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE"
       done
+
+      persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
       ;;
   esac
 done

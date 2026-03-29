@@ -35,6 +35,11 @@ Examples:
   ./glog.sh scan --path /path/to/project --glogtoken "$GLOG_TOKEN" --registry "ghcr.io/glogai/"
   ```
 
+- Scan only selected files:
+  ```bash
+  ./glog.sh scan --path /home/vjelic/Documents/Projects/vulpy --files bad/db.py --glogtoken "$GLOG_TOKEN" --registry "ghcr.io/glogai/"
+  ```
+
 - Clean then scan:
   ```bash
   ./glog.sh clean scan --path /path/to/project --glogtoken "$GLOG_TOKEN" --registry "ghcr.io/glogai/"
@@ -121,6 +126,14 @@ Ignore rule(s) passed to containers as `IGNORE`.
 Example:
 ```bash
 --ignore "vendor/**,node_modules/**"
+```
+
+### `--files FILE1,FILE2`
+Comma-separated list of file paths to scan, relative to `--path`.
+
+Example:
+```bash
+--files "bad/db.py,api/routes.py"
 ```
 
 ### `--sarif-format-type TYPE`
