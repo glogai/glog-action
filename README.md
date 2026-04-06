@@ -102,9 +102,8 @@ jobs:
         uses: ./.github/glog-action
         with:
           lang: 'python'
-          debug: 'false'
-          client: 'demo'
           upload: 'true'
+          client: 'test'
           env: 'dev'
           github-token: ${{ secrets.PAT_TOKEN }}
           glog-token: ${{ secrets.GLOG_TOKEN }}
@@ -124,9 +123,8 @@ steps:
     uses: glogai/glog-action@main
     with:
       lang: 'python'
-      debug: 'false'
-      client: 'demo'
       upload: 'true'
+      client: 'test'
       env: 'dev'
       github-token: ${{ secrets.PAT_TOKEN }}
       glog-token: ${{ secrets.GLOG_TOKEN }}
@@ -152,9 +150,8 @@ steps:
       uses: ./.github/glog-action
       with:
         lang: 'python'
-        debug: 'false'
-        client: 'demo'
         upload: 'true'
+        client: 'test'
         env: 'dev'
         path: 'backend'
         files: 'src/api/routes.py,src/db/models.py'
