@@ -152,7 +152,7 @@ scan_lang() {
 
   for image_name in $image_list; do
     echo "--> Running scanner: ${registry}${image_name}"
-    docker run --rm \
+    docker run --pull always --rm \
       -e GLOGSERVICE="${GLOG_TOKEN}" \
       -e GLOG_TOKEN="${GLOG_TOKEN}" \
       -e HOST_UID="$(id -u)" \
