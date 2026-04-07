@@ -57,13 +57,11 @@ Additional non-language scan keys are also available:
 | Scanner type | Scan key |
 | --- | --- |
 | Open source dependency scan | `oss` |
-| Inventory scan | `inventory` |
-| Secrets scan | `secrets` |
 | Dependency / reference resolver | `resolver` |
 
 When `lang` is omitted, the action auto-detects programming languages from file extensions in the selected scan path. JavaScript detection also covers `js`, `ts`, `jsx`, and `tsx` files.
 
-The non-language scan keys `oss`, `inventory`, and `secrets` are available through `lang`, but are not auto-detected. `resolver` is always added automatically.
+The non-language scan keys `oss` and `secrets` are available through `lang`, but are not auto-detected. `resolver` is always added automatically.
 
 ## Usage
 
