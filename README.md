@@ -200,7 +200,7 @@ Important notes:
 
 ## Local CLI
 
-For manual usage of the underlying Bash helper script, see [CLI.md](CLI.md).
+For manual usage of local helper scripts (`glog.sh` for Bash and `glog.ps1` for PowerShell/Windows), see [CLI.md](CLI.md).
 
 ## Support
 
