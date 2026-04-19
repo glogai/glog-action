@@ -213,7 +213,7 @@ function Invoke-ScanLang {
     param(
         [Parameter(Mandatory = $true)][string]$Lang,
         [Parameter(Mandatory = $true)][string]$PathToScan,
-        [Parameter(Mandatory = $true)][string]$Ignore,
+        [AllowEmptyString()][string]$Ignore = '',
         [Parameter(Mandatory = $true)][string]$Client,
         [Parameter(Mandatory = $true)][string]$EnvironmentName,
         [Parameter(Mandatory = $true)][string]$Registry,
