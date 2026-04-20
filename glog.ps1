@@ -247,6 +247,8 @@ function Invoke-ScanLang {
 
         if ($env:GLOG_DEPSCAN_VDB_VOLUME) {
             $dockerArgs += @('-e', "GLOG_DEPSCAN_VDB_VOLUME=$($env:GLOG_DEPSCAN_VDB_VOLUME)")
+            $vdbMountTarget = if ($env:VDB_HOME) { $env:VDB_HOME } else { '/vdb' }
+            $dockerArgs += @('-v', "$($env:GLOG_DEPSCAN_VDB_VOLUME):$vdbMountTarget")
         }
         if ($env:VDB_APP_ONLY) {
             $dockerArgs += @('-e', "VDB_APP_ONLY=$($env:VDB_APP_ONLY)")

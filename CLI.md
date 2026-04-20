@@ -2,8 +2,8 @@
 
 `glog-action` includes two local helper scripts with equivalent behavior:
 
-- `glog.sh` for Bash environments (Linux/macOS)
-- `glog.ps1` for PowerShell environments (Windows, or PowerShell Core on Linux/macOS)
+- `glog.sh` for Bash environments on Linux/macOS
+- `glog.ps1` for Bash on Windows or for PowerShell environments (Windows, or PowerShell Core on Linux/macOS)
 
 Both scripts run Glog.AI scanner Docker images against a project directory and support running multiple commands in order (for example: `clean scan`).
 
