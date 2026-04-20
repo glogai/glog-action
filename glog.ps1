@@ -427,6 +427,7 @@ try {
                 if (Test-Path -LiteralPath $glogDir -PathType Container) {
                     Get-ChildItem -LiteralPath $glogDir -Force | Remove-Item -Recurse -Force
                 }
+                New-Item -ItemType Directory -Path $glogDir -Force | Out-Null
             }
             'scan' {
                 $scanPath = $projectPath
@@ -453,6 +454,14 @@ try {
                 }
 
                 Persist-ScopedScanArtifacts -ScanPath $scanPath -ProjectPath $projectPath
+
+                $glogDir = Join-Path -Path $projectPath -ChildPath '.glog'
+                if (Test-Path -LiteralPath $glogDir -PathType Container) {
+                    Get-ChildItem -LiteralPath $glogDir -Force |
+                        Where-Object { $_.Name -ne 'glog-scan.sarif' } |
+                        Remove-Item -Recurse -Force
+                    Write-Output "Removed intermediate artifacts from $glogDir"
+                }
             }
         }
     }

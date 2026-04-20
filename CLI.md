@@ -1,9 +1,16 @@
 # Command Line Interface
 
-`glog-action` includes two local helper scripts with equivalent behavior:
+`glog-action` includes two local helper scripts:
 
-- `glog.sh` for Bash environments on Linux/macOS
-- `glog.ps1` for Bash on Windows or for PowerShell environments (Windows, or PowerShell Core on Linux/macOS)
+- `glog.sh` — **Linux/macOS only** (Bash)
+- `glog.ps1` — **Windows** (Bash, cmd, or PowerShell) and PowerShell Core on Linux/macOS
+       
+**Windows users: always use `glog.ps1`, even from Git Bash or WSL-adjacent shells.**
+       
+`glog.sh` uses a direct bind mount (`-v /host/path:/app`) which Docker Desktop on Windows cannot resolve from Git Bash paths (e.g. `/c/Projects/...`). 
+The containers will run but see an empty `/app` and produce no output.
+
+`glog.ps1` works around this by creating a named Docker volume, copying sources into it via an `alpine` container, running the scanner against the volume, and copying `.glog` results back out.
 
 Both scripts run Glog.AI scanner Docker images against a project directory and support running multiple commands in order (for example: `clean scan`).
 
