@@ -228,49 +228,82 @@ function Invoke-ScanLang {
     $hostUid = Get-HostIdValue -Kind uid
     $hostGid = Get-HostIdValue -Kind gid
     $resolvedScanPath = Get-AbsolutePath -PathValue $PathToScan
+    $isWindows = $env:OS -eq 'Windows_NT'
+    $volName = $null
+    $scanMount = "${resolvedScanPath}:/app"
 
-    foreach ($imageName in $imageMap[$Lang]) {
-        Write-Output "--> Running scanner: $Registry$imageName"
+    try {
+        if ($isWindows) {
+            $volName = "glog-src-$([System.Guid]::NewGuid().ToString('N'))"
 
-        $dockerArgs = @(
-            'run', '--pull', 'always', '--rm',
-            '-e', "GLOGSERVICE=$GlogToken",
-            '-e', "GLOG_TOKEN=$GlogToken",
-            '-e', "HOST_UID=$hostUid",
-            '-e', "HOST_GID=$hostGid",
-            '-e', "SARIF_FORMAT_TYPE=$SarifFormatType",
-            '-e', "IGNORE=$Ignore",
-            '-e', "CLIENT=$Client",
-            '-e', "ENV=$EnvironmentName",
-            '-e', "GLOG_IMAGE=$imageName"
-        )
+            & docker volume create $volName
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to create Docker volume '$volName' for language '$Lang'."
+            }
 
-        if ($env:GLOG_DEPSCAN_VDB_VOLUME) {
-            $dockerArgs += @('-e', "GLOG_DEPSCAN_VDB_VOLUME=$($env:GLOG_DEPSCAN_VDB_VOLUME)")
-            $vdbMountTarget = if ($env:VDB_HOME) { $env:VDB_HOME } else { '/vdb' }
-            $dockerArgs += @('-v', "$($env:GLOG_DEPSCAN_VDB_VOLUME):$vdbMountTarget")
-        }
-        if ($env:VDB_APP_ONLY) {
-            $dockerArgs += @('-e', "VDB_APP_ONLY=$($env:VDB_APP_ONLY)")
-        }
-        if ($env:VDB_HOME) {
-            $dockerArgs += @('-e', "VDB_HOME=$($env:VDB_HOME)")
-        }
-        if ($env:VDB_DATABASE_URL) {
-            $dockerArgs += @('-e', "VDB_DATABASE_URL=$($env:VDB_DATABASE_URL)")
-        }
-        if ($env:VDB_AGE_HOURS) {
-            $dockerArgs += @('-e', "VDB_AGE_HOURS=$($env:VDB_AGE_HOURS)")
+            & docker run --rm -v "${volName}:/app" -v "${resolvedScanPath}:/src:ro" alpine sh -c "cp -r /src/. /app/"
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to copy scan sources into Docker volume '$volName' for language '$Lang'."
+            }
+
+            $scanMount = "${volName}:/app"
         }
 
-        $dockerArgs += @(
-            '-v', "${resolvedScanPath}:/app",
-            "$Registry$imageName"
-        )
+        foreach ($imageName in $imageMap[$Lang]) {
+            Write-Output "--> Running scanner: $Registry$imageName"
 
-        & docker @dockerArgs
-        if ($LASTEXITCODE -ne 0) {
-            throw "Scanner failed for language '$Lang' with image '$imageName'."
+            $dockerArgs = @(
+                'run', '--pull', 'always', '--rm',
+                '-e', "GLOGSERVICE=$GlogToken",
+                '-e', "GLOG_TOKEN=$GlogToken",
+                '-e', "HOST_UID=$hostUid",
+                '-e', "HOST_GID=$hostGid",
+                '-e', "SARIF_FORMAT_TYPE=$SarifFormatType",
+                '-e', "IGNORE=$Ignore",
+                '-e', "CLIENT=$Client",
+                '-e', "ENV=$EnvironmentName",
+                '-e', "GLOG_IMAGE=$imageName"
+            )
+
+            if ($env:GLOG_DEPSCAN_VDB_VOLUME) {
+                $dockerArgs += @('-e', "GLOG_DEPSCAN_VDB_VOLUME=$($env:GLOG_DEPSCAN_VDB_VOLUME)")
+                $vdbMountTarget = if ($env:VDB_HOME) { $env:VDB_HOME } else { '/vdb' }
+                $dockerArgs += @('-v', "$($env:GLOG_DEPSCAN_VDB_VOLUME):$vdbMountTarget")
+            }
+            if ($env:VDB_APP_ONLY) {
+                $dockerArgs += @('-e', "VDB_APP_ONLY=$($env:VDB_APP_ONLY)")
+            }
+            if ($env:VDB_HOME) {
+                $dockerArgs += @('-e', "VDB_HOME=$($env:VDB_HOME)")
+            }
+            if ($env:VDB_DATABASE_URL) {
+                $dockerArgs += @('-e', "VDB_DATABASE_URL=$($env:VDB_DATABASE_URL)")
+            }
+            if ($env:VDB_AGE_HOURS) {
+                $dockerArgs += @('-e', "VDB_AGE_HOURS=$($env:VDB_AGE_HOURS)")
+            }
+
+            $dockerArgs += @(
+                '-v', $scanMount,
+                "$Registry$imageName"
+            )
+
+            & docker @dockerArgs
+            if ($LASTEXITCODE -ne 0) {
+                throw "Scanner failed for language '$Lang' with image '$imageName'."
+            }
+        }
+
+        if ($isWindows) {
+            & docker run --rm -v "${volName}:/app" -v "${resolvedScanPath}/.glog:/out" alpine sh -c "if [ -d /app/.glog ]; then cp -r /app/.glog/. /out/; fi"
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to copy scan results from Docker volume '$volName' for language '$Lang'."
+            }
+        }
+    }
+    finally {
+        if ($volName) {
+            & docker volume rm $volName | Out-Null
         }
     }
 }
