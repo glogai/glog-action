@@ -162,6 +162,11 @@ scan_lang() {
       -e CLIENT="$client" \
       -e ENV="$env" \
       -e GLOG_IMAGE="$image_name" \
+      ${GLOG_DEPSCAN_VDB_VOLUME:+-e GLOG_DEPSCAN_VDB_VOLUME="${GLOG_DEPSCAN_VDB_VOLUME}"} \
+      ${VDB_APP_ONLY:+-e VDB_APP_ONLY="${VDB_APP_ONLY}"} \
+      ${VDB_HOME:+-e VDB_HOME="${VDB_HOME}"} \
+      ${VDB_DATABASE_URL:+-e VDB_DATABASE_URL="${VDB_DATABASE_URL}"} \
+      ${VDB_AGE_HOURS:+-e VDB_AGE_HOURS="${VDB_AGE_HOURS}"} \
       -v "$path":/app \
       "${registry}${image_name}"
   done

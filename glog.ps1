@@ -242,7 +242,26 @@ function Invoke-ScanLang {
             '-e', "IGNORE=$Ignore",
             '-e', "CLIENT=$Client",
             '-e', "ENV=$EnvironmentName",
-            '-e', "GLOG_IMAGE=$imageName",
+            '-e', "GLOG_IMAGE=$imageName"
+        )
+
+        if ($env:GLOG_DEPSCAN_VDB_VOLUME) {
+            $dockerArgs += @('-e', "GLOG_DEPSCAN_VDB_VOLUME=$($env:GLOG_DEPSCAN_VDB_VOLUME)")
+        }
+        if ($env:VDB_APP_ONLY) {
+            $dockerArgs += @('-e', "VDB_APP_ONLY=$($env:VDB_APP_ONLY)")
+        }
+        if ($env:VDB_HOME) {
+            $dockerArgs += @('-e', "VDB_HOME=$($env:VDB_HOME)")
+        }
+        if ($env:VDB_DATABASE_URL) {
+            $dockerArgs += @('-e', "VDB_DATABASE_URL=$($env:VDB_DATABASE_URL)")
+        }
+        if ($env:VDB_AGE_HOURS) {
+            $dockerArgs += @('-e', "VDB_AGE_HOURS=$($env:VDB_AGE_HOURS)")
+        }
+
+        $dockerArgs += @(
             '-v', "${resolvedScanPath}:/app",
             "$Registry$imageName"
         )
