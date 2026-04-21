@@ -151,6 +151,12 @@ scan_lang() {
   fi
 
   for image_name in $image_list; do
+    if [[ -n "${GLOG_DEPSCAN_VDB_VOLUME:-}" ]]; then
+      if ! docker volume inspect "${GLOG_DEPSCAN_VDB_VOLUME}" > /dev/null 2>&1; then
+        echo "Creating Docker volume: ${GLOG_DEPSCAN_VDB_VOLUME}"
+        docker volume create "${GLOG_DEPSCAN_VDB_VOLUME}"
+      fi
+    fi
     echo "--> Running scanner: ${registry}${image_name}"
     docker run --pull always --rm \
       -e GLOGSERVICE="${GLOG_TOKEN}" \
@@ -168,6 +174,7 @@ scan_lang() {
       ${VDB_DATABASE_URL:+-e VDB_DATABASE_URL="${VDB_DATABASE_URL}"} \
       ${VDB_AGE_HOURS:+-e VDB_AGE_HOURS="${VDB_AGE_HOURS}"} \
       -v "$path":/app \
+      ${GLOG_DEPSCAN_VDB_VOLUME:+-v "${GLOG_DEPSCAN_VDB_VOLUME}:${VDB_HOME:-/vdb}"} \
       "${registry}${image_name}"
   done
 }
