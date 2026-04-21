@@ -90,7 +90,7 @@ detect_languages() {
     # case "$(basename "$file")" in
     #   Dockerfile|Dockerfile.*|*.dockerfile)  languages["docker"]=1 ;;
     # esac
-  done < <(find "$project_dir" -maxdepth 7 -type f -not -path '*/.*' -print0)
+  done < <(find "$project_dir" -maxdepth 15 -type f -not -path '*/.*' -print0)
 
   echo "${!languages[@]}"
 }
