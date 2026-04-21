@@ -130,12 +130,12 @@ function Get-DetectedLanguages {
         }
 
         $isHiddenPath = $false
-        foreach ($segment in $segments) {
-            if ($segment.StartsWith('.')) {
-                $isHiddenPath = $true
-                break
-            }
-        }
+        # foreach ($segment in $segments) {
+        #     if ($segment.StartsWith('.')) {
+        #         $isHiddenPath = $true
+        #         break
+        #     }
+        # }
         if ($isHiddenPath) {
             continue
         }
