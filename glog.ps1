@@ -125,7 +125,7 @@ function Get-DetectedLanguages {
 
         # Match bash behavior: max depth 4 and skip any hidden path segment (*/.*).
         $segments = $relativePath -split '[\\/]'
-        if ($segments.Count -gt 4) {
+        if ($segments.Count -gt 7) {
             continue
         }
 
