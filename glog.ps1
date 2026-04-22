@@ -53,9 +53,22 @@ function Get-RelativePath {
     )
 
     $resolvedBase = Get-AbsolutePath -PathValue $BasePath
-    $resolvedTarget = Get-AbsolutePath -PathValue $TargetPath
+    return Get-RelativePathFromResolvedBase -ResolvedBasePath $resolvedBase -TargetPath $TargetPath
+}
 
-    $baseWithSlash = $resolvedBase.TrimEnd('\\', '/') + [System.IO.Path]::DirectorySeparatorChar
+function Get-RelativePathFromResolvedBase {
+    param(
+        [Parameter(Mandatory = $true)][string]$ResolvedBasePath,
+        [Parameter(Mandatory = $true)][string]$TargetPath
+    )
+
+    $resolvedTarget = if ([System.IO.Path]::IsPathRooted($TargetPath)) {
+        $TargetPath
+    } else {
+        Get-AbsolutePath -PathValue $TargetPath
+    }
+
+    $baseWithSlash = $ResolvedBasePath.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
     $baseUri = New-Object System.Uri($baseWithSlash)
     $targetUri = New-Object System.Uri($resolvedTarget)
     $relative = $baseUri.MakeRelativeUri($targetUri)
@@ -63,11 +76,83 @@ function Get-RelativePath {
     return [System.Uri]::UnescapeDataString($relative.ToString()) -replace '/', [System.IO.Path]::DirectorySeparatorChar
 }
 
+function Convert-ToNormalizedScanPath {
+    param([Parameter(Mandatory = $true)][string]$PathValue)
+
+    $normalized = $PathValue.Trim() -replace '\\', '/'
+    while ($normalized.StartsWith('./')) {
+        $normalized = $normalized.Substring(2)
+    }
+
+    return $normalized.Trim('/')
+}
+
+function Get-IgnoreEntries {
+    param([AllowEmptyString()][string]$Ignore = '')
+
+    $entries = [System.Collections.Generic.List[string]]::new()
+    foreach ($rawEntry in ($Ignore -split ',')) {
+        $normalized = Convert-ToNormalizedScanPath -PathValue $rawEntry
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            [void]$entries.Add($normalized)
+        }
+    }
+
+    return @($entries)
+}
+
+function Test-IsIgnoredPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$RelativePath,
+        [string[]]$IgnoreEntries = @()
+    )
+
+    if ($IgnoreEntries.Count -eq 0) {
+        return $false
+    }
+
+    $normalizedPath = Convert-ToNormalizedScanPath -PathValue $RelativePath
+    if ([string]::IsNullOrWhiteSpace($normalizedPath)) {
+        return $false
+    }
+
+    $segments = $normalizedPath -split '/'
+    foreach ($ignoreEntry in $IgnoreEntries) {
+        $hasWildcard = $ignoreEntry.IndexOfAny([char[]]@('*', '?', '[')) -ge 0
+        if ($hasWildcard) {
+            if (
+                $normalizedPath -like $ignoreEntry -or
+                $normalizedPath -like "$ignoreEntry/*" -or
+                $normalizedPath -like "*/$ignoreEntry" -or
+                $normalizedPath -like "*/$ignoreEntry/*"
+            ) {
+                return $true
+            }
+
+            continue
+        }
+
+        if ($ignoreEntry.Contains('/')) {
+            if ($normalizedPath -eq $ignoreEntry -or $normalizedPath.StartsWith("$ignoreEntry/")) {
+                return $true
+            }
+
+            continue
+        }
+
+        if ($segments -contains $ignoreEntry) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-HostIdValue {
     param([Parameter(Mandatory = $true)][ValidateSet('uid', 'gid')][string]$Kind)
 
-    $isWindows = $env:OS -eq 'Windows_NT'
-    if ($isWindows) {
+    $runningOnWindows = $env:OS -eq 'Windows_NT'
+    if ($runningOnWindows) {
         return '1000'
     }
 
@@ -114,32 +199,62 @@ function Persist-ScopedScanArtifacts {
     Write-Output "Persisted scoped scan artifacts to $projectGlogDir"
 }
 
+function Get-ScanFiles {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectDir,
+        [string[]]$IgnoreEntries = @()
+    )
+
+    $resolvedProjectDir = Get-AbsolutePath -PathValue $ProjectDir
+    $files = [System.Collections.Generic.List[object]]::new()
+    $dirsToVisit = [System.Collections.Generic.Queue[object]]::new()
+    $dirsToVisit.Enqueue([pscustomobject]@{
+            Path  = $resolvedProjectDir
+            Depth = 0
+        })
+
+    while ($dirsToVisit.Count -gt 0) {
+        $current = $dirsToVisit.Dequeue()
+
+        foreach ($item in (Get-ChildItem -LiteralPath $current.Path -Force)) {
+            if ($item.Name.StartsWith('.')) {
+                continue
+            }
+
+            $relativePath = Get-RelativePathFromResolvedBase -ResolvedBasePath $resolvedProjectDir -TargetPath $item.FullName
+            if (Test-IsIgnoredPath -RelativePath $relativePath -IgnoreEntries $IgnoreEntries) {
+                continue
+            }
+
+            if ($item.PSIsContainer) {
+                $isReparsePoint = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+                if (-not $isReparsePoint -and $current.Depth -lt 3) {
+                    $dirsToVisit.Enqueue([pscustomobject]@{
+                            Path  = $item.FullName
+                            Depth = $current.Depth + 1
+                        })
+                }
+
+                continue
+            }
+
+            [void]$files.Add($item)
+        }
+    }
+
+    return @($files)
+}
+
 function Get-DetectedLanguages {
-    param([Parameter(Mandatory = $true)][string]$ProjectDir)
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectDir,
+        [string[]]$IgnoreEntries = @()
+    )
 
     $found = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $files = Get-ChildItem -LiteralPath $ProjectDir -Recurse -File -Force
+    $files = Get-ScanFiles -ProjectDir $ProjectDir -IgnoreEntries $IgnoreEntries
 
     foreach ($file in $files) {
-        $relativePath = Get-RelativePath -BasePath $ProjectDir -TargetPath $file.FullName
-
-        # Match bash behavior: max depth 4 and skip any hidden path segment (*/.*).
-        $segments = $relativePath -split '[\\/]'
-        if ($segments.Count -gt 7) {
-            continue
-        }
-
-        $isHiddenPath = $false
-        # foreach ($segment in $segments) {
-        #     if ($segment.StartsWith('.')) {
-        #         $isHiddenPath = $true
-        #         break
-        #     }
-        # }
-        if ($isHiddenPath) {
-            continue
-        }
-
         $extension = $file.Extension.TrimStart('.').ToLowerInvariant()
         switch ($extension) {
             'c'            { [void]$found.Add('cpp') }
@@ -209,13 +324,116 @@ function New-ScopedFilesDir {
     return $tempDir
 }
 
+function Convert-ToPosixShellLiteral {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    return "'" + ($Value -replace "'", "'""'""'") + "'"
+}
+
+function Get-TarExcludePatterns {
+    param([Parameter(Mandatory = $true)][string]$IgnoreEntry)
+
+    $normalized = Convert-ToNormalizedScanPath -PathValue $IgnoreEntry
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        return @()
+    }
+
+    $patterns = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $hasWildcard = $normalized.IndexOfAny([char[]]@('*', '?', '[')) -ge 0
+    $prefixed = "./$normalized"
+
+    [void]$patterns.Add($normalized)
+    [void]$patterns.Add($prefixed)
+
+    if (-not $hasWildcard) {
+        [void]$patterns.Add("$normalized/*")
+        [void]$patterns.Add("$prefixed/*")
+
+        if (-not $normalized.Contains('/')) {
+            [void]$patterns.Add("*/$normalized")
+            [void]$patterns.Add("*/$normalized/*")
+            [void]$patterns.Add("./*/$normalized")
+            [void]$patterns.Add("./*/$normalized/*")
+        }
+    }
+
+    return @($patterns)
+}
+
+function Get-WindowsVolumeCopyCommand {
+    param([string[]]$IgnoreEntries = @())
+
+    $excludeArgs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($ignoreEntry in $IgnoreEntries) {
+        foreach ($pattern in (Get-TarExcludePatterns -IgnoreEntry $ignoreEntry)) {
+            [void]$excludeArgs.Add("--exclude=" + (Convert-ToPosixShellLiteral -Value $pattern))
+        }
+    }
+
+    $excludeText = if ($excludeArgs.Count -gt 0) {
+        ' ' + ((@($excludeArgs)) -join ' ')
+    } else {
+        ''
+    }
+
+    return "set -eu; cd /src; tar cf -$excludeText . | tar xf - -C /app"
+}
+
+function New-WindowsScanVolume {
+    param(
+        [Parameter(Mandatory = $true)][string]$PathToScan,
+        [string[]]$IgnoreEntries = @()
+    )
+
+    $resolvedScanPath = Get-AbsolutePath -PathValue $PathToScan
+    $volName = "glog-src-$([System.Guid]::NewGuid().ToString('N'))"
+
+    try {
+        & docker volume create $volName | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create Docker volume '$volName'."
+        }
+
+        $copyCommand = Get-WindowsVolumeCopyCommand -IgnoreEntries $IgnoreEntries
+        & docker run --rm -v "${volName}:/app" -v "${resolvedScanPath}:/src:ro" alpine sh -c $copyCommand
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to copy scan sources into Docker volume '$volName'."
+        }
+
+        return $volName
+    }
+    catch {
+        if ($volName) {
+            & docker volume rm $volName | Out-Null
+        }
+
+        throw
+    }
+}
+
+function Copy-ScanArtifactsFromVolume {
+    param(
+        [Parameter(Mandatory = $true)][string]$VolumeName,
+        [Parameter(Mandatory = $true)][string]$ScanPath
+    )
+
+    $resolvedScanPath = Get-AbsolutePath -PathValue $ScanPath
+    $outputDir = Join-Path -Path $resolvedScanPath -ChildPath '.glog'
+    New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+
+    & docker run --rm -v "${VolumeName}:/app" -v "${outputDir}:/out" alpine sh -c "if [ -d /app/.glog ]; then cp -r /app/.glog/. /out/; fi"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to copy scan results from Docker volume '$VolumeName'."
+    }
+}
+
 function Invoke-ScanLang {
     param(
         [Parameter(Mandatory = $true)][string]$Lang,
-        [Parameter(Mandatory = $true)][string]$PathToScan,
+        [Parameter(Mandatory = $true)][string]$ScanMount,
         [AllowEmptyString()][string]$Ignore = '',
-        [Parameter(Mandatory = $true)][string]$Client,
-        [Parameter(Mandatory = $true)][string]$EnvironmentName,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Client,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$EnvironmentName,
         [Parameter(Mandatory = $true)][string]$Registry,
         [Parameter(Mandatory = $true)][string]$SarifFormatType,
         [Parameter(Mandatory = $true)][string]$GlogToken
@@ -227,83 +445,49 @@ function Invoke-ScanLang {
 
     $hostUid = Get-HostIdValue -Kind uid
     $hostGid = Get-HostIdValue -Kind gid
-    $resolvedScanPath = Get-AbsolutePath -PathValue $PathToScan
-    $isWindows = $env:OS -eq 'Windows_NT'
-    $volName = $null
-    $scanMount = "${resolvedScanPath}:/app"
 
-    try {
-        if ($isWindows) {
-            $volName = "glog-src-$([System.Guid]::NewGuid().ToString('N'))"
+    foreach ($imageName in $imageMap[$Lang]) {
+        Write-Output "--> Running scanner: $Registry$imageName"
 
-            & docker volume create $volName
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to create Docker volume '$volName' for language '$Lang'."
-            }
+        $dockerArgs = @(
+            'run', '--pull', 'always', '--rm',
+            '-e', "GLOGSERVICE=$GlogToken",
+            '-e', "GLOG_TOKEN=$GlogToken",
+            '-e', "HOST_UID=$hostUid",
+            '-e', "HOST_GID=$hostGid",
+            '-e', "SARIF_FORMAT_TYPE=$SarifFormatType",
+            '-e', "IGNORE=$Ignore",
+            '-e', "CLIENT=$Client",
+            '-e', "ENV=$EnvironmentName",
+            '-e', "GLOG_IMAGE=$imageName"
+        )
 
-            & docker run --rm -v "${volName}:/app" -v "${resolvedScanPath}:/src:ro" alpine sh -c "cp -r /src/. /app/"
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to copy scan sources into Docker volume '$volName' for language '$Lang'."
-            }
-
-            $scanMount = "${volName}:/app"
+        if ($env:GLOG_DEPSCAN_VDB_VOLUME) {
+            $dockerArgs += @('-e', "GLOG_DEPSCAN_VDB_VOLUME=$($env:GLOG_DEPSCAN_VDB_VOLUME)")
+            $vdbMountTarget = if ($env:VDB_HOME) { $env:VDB_HOME } else { '/vdb' }
+            $dockerArgs += @('-v', "$($env:GLOG_DEPSCAN_VDB_VOLUME):$vdbMountTarget")
+        }
+        if ($env:VDB_APP_ONLY) {
+            $dockerArgs += @('-e', "VDB_APP_ONLY=$($env:VDB_APP_ONLY)")
+        }
+        if ($env:VDB_HOME) {
+            $dockerArgs += @('-e', "VDB_HOME=$($env:VDB_HOME)")
+        }
+        if ($env:VDB_DATABASE_URL) {
+            $dockerArgs += @('-e', "VDB_DATABASE_URL=$($env:VDB_DATABASE_URL)")
+        }
+        if ($env:VDB_AGE_HOURS) {
+            $dockerArgs += @('-e', "VDB_AGE_HOURS=$($env:VDB_AGE_HOURS)")
         }
 
-        foreach ($imageName in $imageMap[$Lang]) {
-            Write-Output "--> Running scanner: $Registry$imageName"
+        $dockerArgs += @(
+            '-v', $ScanMount,
+            "$Registry$imageName"
+        )
 
-            $dockerArgs = @(
-                'run', '--pull', 'always', '--rm',
-                '-e', "GLOGSERVICE=$GlogToken",
-                '-e', "GLOG_TOKEN=$GlogToken",
-                '-e', "HOST_UID=$hostUid",
-                '-e', "HOST_GID=$hostGid",
-                '-e', "SARIF_FORMAT_TYPE=$SarifFormatType",
-                '-e', "IGNORE=$Ignore",
-                '-e', "CLIENT=$Client",
-                '-e', "ENV=$EnvironmentName",
-                '-e', "GLOG_IMAGE=$imageName"
-            )
-
-            if ($env:GLOG_DEPSCAN_VDB_VOLUME) {
-                $dockerArgs += @('-e', "GLOG_DEPSCAN_VDB_VOLUME=$($env:GLOG_DEPSCAN_VDB_VOLUME)")
-                $vdbMountTarget = if ($env:VDB_HOME) { $env:VDB_HOME } else { '/vdb' }
-                $dockerArgs += @('-v', "$($env:GLOG_DEPSCAN_VDB_VOLUME):$vdbMountTarget")
-            }
-            if ($env:VDB_APP_ONLY) {
-                $dockerArgs += @('-e', "VDB_APP_ONLY=$($env:VDB_APP_ONLY)")
-            }
-            if ($env:VDB_HOME) {
-                $dockerArgs += @('-e', "VDB_HOME=$($env:VDB_HOME)")
-            }
-            if ($env:VDB_DATABASE_URL) {
-                $dockerArgs += @('-e', "VDB_DATABASE_URL=$($env:VDB_DATABASE_URL)")
-            }
-            if ($env:VDB_AGE_HOURS) {
-                $dockerArgs += @('-e', "VDB_AGE_HOURS=$($env:VDB_AGE_HOURS)")
-            }
-
-            $dockerArgs += @(
-                '-v', $scanMount,
-                "$Registry$imageName"
-            )
-
-            & docker @dockerArgs
-            if ($LASTEXITCODE -ne 0) {
-                throw "Scanner failed for language '$Lang' with image '$imageName'."
-            }
-        }
-
-        if ($isWindows) {
-            & docker run --rm -v "${volName}:/app" -v "${resolvedScanPath}/.glog:/out" alpine sh -c "if [ -d /app/.glog ]; then cp -r /app/.glog/. /out/; fi"
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to copy scan results from Docker volume '$volName' for language '$Lang'."
-            }
-        }
-    }
-    finally {
-        if ($volName) {
-            & docker volume rm $volName | Out-Null
+        & docker @dockerArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "Scanner failed for language '$Lang' with image '$imageName'."
         }
     }
 }
@@ -431,6 +615,7 @@ try {
             }
             'scan' {
                 $scanPath = $projectPath
+                $ignoreEntries = Get-IgnoreEntries -Ignore $ignore
 
                 if ($files.Count -gt 0) {
                     Write-Output 'Preparing scoped scan for selected files...'
@@ -439,18 +624,43 @@ try {
                     Write-Output "Scoped scan directory: $scanPath"
                 }
 
-                if ($languages.Count -eq 0) {
-                    $detected = Get-DetectedLanguages -ProjectDir $scanPath
+                $scanLanguages = [System.Collections.Generic.List[string]]::new()
+                foreach ($lang in $languages) {
+                    [void]$scanLanguages.Add($lang)
+                }
+
+                if ($scanLanguages.Count -eq 0) {
+                    $detected = Get-DetectedLanguages -ProjectDir $scanPath -IgnoreEntries $ignoreEntries
                     foreach ($lang in $detected) {
-                        [void]$languages.Add($lang)
+                        [void]$scanLanguages.Add($lang)
                     }
                 }
 
-                [void]$languages.Add('resolver')
+                [void]$scanLanguages.Add('resolver')
 
-                foreach ($lang in $languages) {
-                    Write-Output "Analyzing language: $lang"
-                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken
+                $resolvedScanPath = Get-AbsolutePath -PathValue $scanPath
+                $scanMount = "${resolvedScanPath}:/app"
+                $windowsVolumeName = $null
+
+                try {
+                    if ($env:OS -eq 'Windows_NT') {
+                        $windowsVolumeName = New-WindowsScanVolume -PathToScan $scanPath -IgnoreEntries $ignoreEntries
+                        $scanMount = "${windowsVolumeName}:/app"
+                    }
+
+                    foreach ($lang in $scanLanguages) {
+                        Write-Output "Analyzing language: $lang"
+                        Invoke-ScanLang -Lang $lang -ScanMount $scanMount -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken
+                    }
+
+                    if ($windowsVolumeName) {
+                        Copy-ScanArtifactsFromVolume -VolumeName $windowsVolumeName -ScanPath $scanPath
+                    }
+                }
+                finally {
+                    if ($windowsVolumeName) {
+                        & docker volume rm $windowsVolumeName | Out-Null
+                    }
                 }
 
                 Persist-ScopedScanArtifacts -ScanPath $scanPath -ProjectPath $projectPath
