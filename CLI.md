@@ -10,7 +10,7 @@
 `glog.sh` uses a direct bind mount (`-v /host/path:/app`) which Docker Desktop on Windows cannot resolve from Git Bash paths (e.g. `/c/Projects/...`). 
 The containers will run but see an empty `/app` and produce no output.
 
-`glog.ps1` works around this by creating a named Docker volume, copying sources into it via an `alpine` container, running the scanner against the volume, and copying `.glog` results back out.
+`glog.ps1` works around this by creating a named Docker volume once per scan, copying sources into it via an `alpine` container, running all requested scanners against that volume, and copying `.glog` results back out. On Windows, `--ignore` is also applied during that staging copy so large skipped directories do not become startup overhead.
 
 Both scripts run Glog.AI scanner Docker images against a project directory and support running multiple commands in order (for example: `clean scan`).
 
@@ -205,11 +205,12 @@ Example:
 
 Sets `SARIF_FORMAT_TYPE` passed to containers.
 
-Allowed values:
+Common values:
 
 - `GITHUB` (default)
 - `GITLAB`
 - `STANDARD`
+- `AZURE`
 
 Examples:
 
@@ -217,6 +218,7 @@ Examples:
 --sarif-format-type GITHUB
 --sarif-format-type GITLAB
 --sarif-format-type STANDARD
+--sarif-format-type AZURE
 ```
 
 ---
