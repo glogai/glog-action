@@ -136,9 +136,6 @@ if not defined TARGET_REPO_NAME (
 set "GLOG_ACTION_DIR=%WORKSPACE%\%GLOG_ACTION_REPO_NAME%"
 set "TARGET_DIR=%WORKSPACE%\%TARGET_REPO_NAME%"
 set "SARIF_FILE=%TARGET_DIR%\.glog\glog-scan.sarif"
-set "ERRORS="
-set "WARNINGS="
-set "NOTES="
 
 if not defined GLOG_TOKEN (
   echo GLOG_TOKEN is not set.
@@ -217,66 +214,47 @@ echo Missing SARIF file: %SARIF_FILE%
 exit /b 1
 :have_sarif
 
-rem Parse the generated SARIF and return "errors warnings notes" back to cmd.exe.
+rem Parse the generated SARIF in one standalone PowerShell command.
 echo Parsing SARIF summary...
-for /f "usebackq tokens=1,2,3" %%A in (`
-  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$path = $env:SARIF_FILE; ^
-    try { ^
-      $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop; ^
-      $sarif = ConvertFrom-Json -InputObject $raw -ErrorAction Stop ^
-    } catch { ^
-      Write-Error $_; ^
-      exit 1 ^
-    }; ^
-    $errors = 0; ^
-    $warnings = 0; ^
-    $notes = 0; ^
-    foreach ($run in @($sarif.runs)) { ^
-      foreach ($result in @($run.results)) { ^
-        $level = [string]$result.level; ^
-        if ([string]::IsNullOrWhiteSpace($level)) { $level = 'warning' }; ^
-        switch ($level.ToLowerInvariant()) { ^
-          'error' { $errors++ } ^
-          'warning' { $warnings++ } ^
-          'note' { $notes++ } ^
-        } ^
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$path = $env:SARIF_FILE; ^
+  try { ^
+    $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop; ^
+    $sarif = ConvertFrom-Json -InputObject $raw -ErrorAction Stop ^
+  } catch { ^
+    Write-Error $_; ^
+    exit 1 ^
+  }; ^
+  $errors = 0; ^
+  $warnings = 0; ^
+  $notes = 0; ^
+  foreach ($run in $sarif.runs) { ^
+    foreach ($result in $run.results) { ^
+      $level = [string]$result.level; ^
+      if ([string]::IsNullOrWhiteSpace($level)) { $level = 'warning' } ^
+      switch ($level.ToLowerInvariant()) { ^
+        'error' { $errors++ } ^
+        'warning' { $warnings++ } ^
+        'note' { $notes++ } ^
       } ^
-    }; ^
-    Write-Output ($errors.ToString() + ' ' + $warnings.ToString() + ' ' + $notes.ToString())"`
-) do (
-  set "ERRORS=%%A"
-  set "WARNINGS=%%B"
-  set "NOTES=%%C"
-)
-if errorlevel 1 (
-  echo Failed to parse SARIF: %SARIF_FILE%
-  exit /b 1
-)
-
-if not defined ERRORS (
-  echo Failed to read SARIF summary from %SARIF_FILE%
-  exit /b 1
-)
-
-echo SARIF summary: errors=%ERRORS% warnings=%WARNINGS% notes=%NOTES%
-
-rem Gate error-level and warning-level findings independently.
-if %ERRORS% GTR 0 (
-  echo Error: SARIF contains error-level findings
-  if /I not "%FAIL_ON_ERROR%"=="false" (
-    echo Blocking build because FAIL_ON_ERROR=true
-    exit /b 1
-  )
-)
-
-if %WARNINGS% GTR 0 (
-  echo Warning: SARIF contains warning-level findings
-  if /I "%FAIL_ON_WARNING%"=="true" (
-    echo Blocking build because FAIL_ON_WARNING=true
-    exit /b 1
-  )
-)
+    } ^
+  }; ^
+  Write-Output ('SARIF summary: errors=' + $errors + ' warnings=' + $warnings + ' notes=' + $notes); ^
+  if ($errors -gt 0) { ^
+    Write-Output 'Error: SARIF contains error-level findings'; ^
+    if ($env:FAIL_ON_ERROR -ne 'false') { ^
+      Write-Output 'Blocking build because FAIL_ON_ERROR=true'; ^
+      exit 1 ^
+    } ^
+  }; ^
+  if ($warnings -gt 0) { ^
+    Write-Output 'Warning: SARIF contains warning-level findings'; ^
+    if ($env:FAIL_ON_WARNING -eq 'true') { ^
+      Write-Output 'Blocking build because FAIL_ON_WARNING=true'; ^
+      exit 1 ^
+    } ^
+  }"
+if errorlevel 1 exit /b %ERRORLEVEL%
 
 exit /b 0
 ```
@@ -447,7 +425,7 @@ The original generated file remains in the workspace, typically at:
 
 ### Why is PowerShell still used in a batch job?
 
-Batch is adequate for orchestration, Git commands, and exit-code handling. It is poor at parsing JSON. The script uses a single PowerShell command to read `glog-scan.sarif`, count result levels, and return three integers back to `cmd.exe`.
+Batch is adequate for orchestration, Git commands, and exit-code handling. It is poor at parsing JSON. The script uses a single standalone PowerShell command to read `glog-scan.sarif`, print the SARIF summary, and apply the `FAIL_ON_ERROR` / `FAIL_ON_WARNING` policy.
 
 ### Why clone both repositories in the batch step?
 
@@ -516,6 +494,10 @@ If the log contains the full `glog.cmd scan ... --glogtoken ...` command line, c
 ### Both scan variants run, or clone/check blocks behave unexpectedly
 
 This is usually a `cmd.exe` parsing problem, not a Jenkins condition problem. Parenthesized blocks that expand path variables such as `%WORKSPACE%`, `%TARGET_DIR%`, or `%SARIF_FILE%` can be misparsed when those values contain characters like `(` or `)`, which is common when job names appear in workspace paths. The current example avoids that by using labels for clone/refresh flow, single-line `if defined` checks for the scan command, and `$env:SARIF_FILE` inside the PowerShell parser.
+
+### `) was unexpected at this time.` during SARIF parsing
+
+That error comes from `cmd.exe`, not from the SARIF file itself. The usual cause is a `for /f` or `if (...)` batch block that embeds complex PowerShell code or path values containing `(` or `)`. The current example avoids `for /f` for SARIF parsing and runs one standalone PowerShell command instead.
 
 ### `glog-action` or the scan target repository was not checked out
 
