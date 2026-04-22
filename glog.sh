@@ -37,6 +37,8 @@ Options:
   --ignore PATTERN          Patterns to ignore
   --sarif-format-type TYPE   Default: GITHUB
   --files FILE1,FILE2      Comma-separated list of files to scan relative to --path
+  -u|--upload               Upload scan results to On-Prem Dashboard
+
 EOF
 }
 
