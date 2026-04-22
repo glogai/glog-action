@@ -37,6 +37,8 @@ Options:
   --ignore PATTERN          Patterns to ignore
   --sarif-format-type TYPE   Default: GITHUB
   --files FILE1,FILE2      Comma-separated list of files to scan relative to --path
+  -u|--upload               Upload scan results to On-Prem Dashboard
+
 EOF
 }
 
@@ -144,6 +146,7 @@ scan_lang() {
   local env=$5
   local registry=$6
   local sarif_format_type=$7
+  local resolver_upload=$8
 
   local image_list="${IMAGE_MAP[$lang]:-}"
   if [[ -z "$image_list" ]]; then
@@ -164,6 +167,7 @@ scan_lang() {
       -e HOST_UID="$(id -u)" \
       -e HOST_GID="$(id -g)" \
       -e SARIF_FORMAT_TYPE="$sarif_format_type" \
+      -e RESOLVER_UPLOAD="$resolver_upload" \
       -e IGNORE="$ignore" \
       -e CLIENT="$client" \
       -e ENV="$env" \
@@ -192,6 +196,7 @@ GLOG_TOKEN="${GLOG_TOKEN:-}"
 SARIF_FORMAT_TYPE="${SARIF_FORMAT_TYPE:-GITHUB}"
 FILES=()
 TEMP_SCAN_DIR=""
+RESOLVER_UPLOAD=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -205,6 +210,7 @@ while [[ $# -gt 0 ]]; do
     --ignore) IGNORE="$2"; shift 2 ;;
     --registry) REGISTRY="$2"; shift 2 ;;
     --sarif-format-type) SARIF_FORMAT_TYPE="$2"; shift 2 ;;
+     -u|--upload) RESOLVER_UPLOAD=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -240,7 +246,7 @@ for cmd in "${COMMANDS[@]}"; do
 
       for lang in "${LANGUAGES[@]}"; do
         echo "Analyzing language: $lang"
-        scan_lang "$lang" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE"
+        scan_lang "$lang" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "$RESOLVER_UPLOAD"
       done
 
       persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"

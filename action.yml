@@ -22,6 +22,10 @@ inputs:
     description: "Upload Glog assessment file to Github Security page"
     required: false
     default: 'true'
+  on-prem-upload:
+    description: "Upload scan results to On-Prem Dashboard (passes --upload to resolver scanner)"
+    required: false
+    default: 'false'
   path:
     description: Relative path
     required: false
@@ -89,6 +93,9 @@ runs:
         fi
         if [ -n "${{ inputs.files }}" ]; then
           ARGS+=("--files" "${{ inputs.files }}")
+        fi
+        if [ "${{ inputs.on-prem-upload }}" = "true" ]; then
+          ARGS+=("--upload")
         fi
         $TOOL_CMD "${ARGS[@]}"
       shell: bash
