@@ -167,66 +167,61 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem Reuse existing clones when available so later builds only fetch the branch tip.
+rem Avoid parenthesized path-sensitive if/else blocks; cmd.exe can misparse values like C:\Jobs\My Job (1)\...
 echo Preparing glog-action checkout: %GLOG_ACTION_DIR%
-if not exist "%GLOG_ACTION_DIR%\.git" (
-  echo Cloning glog-action branch: %GLOG_ACTION_BRANCH%
-  git clone --depth 1 --branch "%GLOG_ACTION_BRANCH%" "%GLOG_ACTION_REPO_URL%" "%GLOG_ACTION_DIR%"
-  if errorlevel 1 exit /b %ERRORLEVEL%
-) else (
-  echo Refreshing glog-action branch: %GLOG_ACTION_BRANCH%
-  git -C "%GLOG_ACTION_DIR%" fetch --depth 1 origin "%GLOG_ACTION_BRANCH%"
-  if errorlevel 1 exit /b %ERRORLEVEL%
+if exist "%GLOG_ACTION_DIR%\.git" goto refresh_glog_action
+echo Cloning glog-action branch: %GLOG_ACTION_BRANCH%
+git clone --depth 1 --branch "%GLOG_ACTION_BRANCH%" "%GLOG_ACTION_REPO_URL%" "%GLOG_ACTION_DIR%"
+if errorlevel 1 exit /b %ERRORLEVEL%
+goto after_glog_action
+:refresh_glog_action
+echo Refreshing glog-action branch: %GLOG_ACTION_BRANCH%
+git -C "%GLOG_ACTION_DIR%" fetch --depth 1 origin "%GLOG_ACTION_BRANCH%"
+if errorlevel 1 exit /b %ERRORLEVEL%
+git -C "%GLOG_ACTION_DIR%" reset --hard FETCH_HEAD
+if errorlevel 1 exit /b %ERRORLEVEL%
+:after_glog_action
 
-  git -C "%GLOG_ACTION_DIR%" reset --hard FETCH_HEAD
-  if errorlevel 1 exit /b %ERRORLEVEL%
-)
-
-if not exist "%GLOG_ACTION_DIR%\glog.cmd" (
-  echo Missing scanner entry point: %GLOG_ACTION_DIR%\glog.cmd
-  exit /b 1
-)
+if exist "%GLOG_ACTION_DIR%\glog.cmd" goto have_scanner_entrypoint
+echo Missing scanner entry point: %GLOG_ACTION_DIR%\glog.cmd
+exit /b 1
+:have_scanner_entrypoint
 
 echo Preparing target checkout: %TARGET_DIR%
-if not exist "%TARGET_DIR%\.git" (
-  echo Cloning target branch: %TARGET_REPO_BRANCH%
-  git clone --depth 1 --branch "%TARGET_REPO_BRANCH%" "%TARGET_REPO_URL%" "%TARGET_DIR%"
-  if errorlevel 1 exit /b %ERRORLEVEL%
-) else (
-  echo Refreshing target branch: %TARGET_REPO_BRANCH%
-  git -C "%TARGET_DIR%" fetch --depth 1 origin "%TARGET_REPO_BRANCH%"
-  if errorlevel 1 exit /b %ERRORLEVEL%
-
-  git -C "%TARGET_DIR%" reset --hard FETCH_HEAD
-  if errorlevel 1 exit /b %ERRORLEVEL%
-)
+if exist "%TARGET_DIR%\.git" goto refresh_target
+echo Cloning target branch: %TARGET_REPO_BRANCH%
+git clone --depth 1 --branch "%TARGET_REPO_BRANCH%" "%TARGET_REPO_URL%" "%TARGET_DIR%"
+if errorlevel 1 exit /b %ERRORLEVEL%
+goto after_target
+:refresh_target
+echo Refreshing target branch: %TARGET_REPO_BRANCH%
+git -C "%TARGET_DIR%" fetch --depth 1 origin "%TARGET_REPO_BRANCH%"
+if errorlevel 1 exit /b %ERRORLEVEL%
+git -C "%TARGET_DIR%" reset --hard FETCH_HEAD
+if errorlevel 1 exit /b %ERRORLEVEL%
+:after_target
 
 rem Use glog.cmd so the wrapper picks pwsh or Windows PowerShell automatically.
-rem Add --lang only when SCAN_LANG is defined.
-if defined SCAN_LANG (
-  echo Language filter: %SCAN_LANG%
-  echo Starting scan for: %TARGET_DIR%
-  echo SARIF upload to Glog server: enabled (-u)
-  call "%GLOG_ACTION_DIR%\glog.cmd" scan --path "%TARGET_DIR%" --client "%GLOG_CLIENT%" --env "%GLOG_ENV%" --glogtoken "%GLOG_TOKEN%" --registry "ghcr.io/glogai/" --lang "%SCAN_LANG%" --sarif-format-type AZURE -u
-) else (
-  echo Language filter: auto-detect
-  echo Starting scan for: %TARGET_DIR%
-  echo SARIF upload to Glog server: enabled (-u)
-  call "%GLOG_ACTION_DIR%\glog.cmd" scan --path "%TARGET_DIR%" --client "%GLOG_CLIENT%" --env "%GLOG_ENV%" --glogtoken "%GLOG_TOKEN%" --registry "ghcr.io/glogai/" --sarif-format-type AZURE -u
-)
+rem Avoid a parenthesized if/else here; cmd.exe can misparse blocks when expanded values contain special characters.
+if defined SCAN_LANG echo Language filter: %SCAN_LANG%
+if not defined SCAN_LANG echo Language filter: auto-detect
+echo Starting scan for: %TARGET_DIR%
+echo SARIF upload to Glog server: enabled (-u)
+if defined SCAN_LANG call "%GLOG_ACTION_DIR%\glog.cmd" scan --path "%TARGET_DIR%" --client "%GLOG_CLIENT%" --env "%GLOG_ENV%" --glogtoken "%GLOG_TOKEN%" --registry "ghcr.io/glogai/" --lang "%SCAN_LANG%" --sarif-format-type AZURE -u
+if not defined SCAN_LANG call "%GLOG_ACTION_DIR%\glog.cmd" scan --path "%TARGET_DIR%" --client "%GLOG_CLIENT%" --env "%GLOG_ENV%" --glogtoken "%GLOG_TOKEN%" --registry "ghcr.io/glogai/" --sarif-format-type AZURE -u
 if errorlevel 1 exit /b %ERRORLEVEL%
 
 echo Checking SARIF output: %SARIF_FILE%
-if not exist "%SARIF_FILE%" (
-  echo Missing SARIF file: %SARIF_FILE%
-  exit /b 1
-)
+if exist "%SARIF_FILE%" goto have_sarif
+echo Missing SARIF file: %SARIF_FILE%
+exit /b 1
+:have_sarif
 
 rem Parse the generated SARIF and return "errors warnings notes" back to cmd.exe.
 echo Parsing SARIF summary...
 for /f "usebackq tokens=1,2,3" %%A in (`
   powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$path = '%SARIF_FILE%'; ^
+    "$path = $env:SARIF_FILE; ^
     try { ^
       $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop; ^
       $sarif = ConvertFrom-Json -InputObject $raw -ErrorAction Stop ^
@@ -359,53 +354,48 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem Reuse existing clones when available so later builds only fetch the branch tip.
+rem Avoid parenthesized path-sensitive if/else blocks; cmd.exe can misparse values like C:\Jobs\My Job (1)\...
 echo Preparing glog-action checkout: %GLOG_ACTION_DIR%
-if not exist "%GLOG_ACTION_DIR%\.git" (
-  echo Cloning glog-action branch: %GLOG_ACTION_BRANCH%
-  git clone --depth 1 --branch "%GLOG_ACTION_BRANCH%" "%GLOG_ACTION_REPO_URL%" "%GLOG_ACTION_DIR%"
-  if errorlevel 1 exit /b %ERRORLEVEL%
-) else (
-  echo Refreshing glog-action branch: %GLOG_ACTION_BRANCH%
-  git -C "%GLOG_ACTION_DIR%" fetch --depth 1 origin "%GLOG_ACTION_BRANCH%"
-  if errorlevel 1 exit /b %ERRORLEVEL%
+if exist "%GLOG_ACTION_DIR%\.git" goto refresh_glog_action
+echo Cloning glog-action branch: %GLOG_ACTION_BRANCH%
+git clone --depth 1 --branch "%GLOG_ACTION_BRANCH%" "%GLOG_ACTION_REPO_URL%" "%GLOG_ACTION_DIR%"
+if errorlevel 1 exit /b %ERRORLEVEL%
+goto after_glog_action
+:refresh_glog_action
+echo Refreshing glog-action branch: %GLOG_ACTION_BRANCH%
+git -C "%GLOG_ACTION_DIR%" fetch --depth 1 origin "%GLOG_ACTION_BRANCH%"
+if errorlevel 1 exit /b %ERRORLEVEL%
+git -C "%GLOG_ACTION_DIR%" reset --hard FETCH_HEAD
+if errorlevel 1 exit /b %ERRORLEVEL%
+:after_glog_action
 
-  git -C "%GLOG_ACTION_DIR%" reset --hard FETCH_HEAD
-  if errorlevel 1 exit /b %ERRORLEVEL%
-)
-
-if not exist "%GLOG_ACTION_DIR%\glog.cmd" (
-  echo Missing scanner entry point: %GLOG_ACTION_DIR%\glog.cmd
-  exit /b 1
-)
+if exist "%GLOG_ACTION_DIR%\glog.cmd" goto have_scanner_entrypoint
+echo Missing scanner entry point: %GLOG_ACTION_DIR%\glog.cmd
+exit /b 1
+:have_scanner_entrypoint
 
 echo Preparing target checkout: %TARGET_DIR%
-if not exist "%TARGET_DIR%\.git" (
-  echo Cloning target branch: %TARGET_REPO_BRANCH%
-  git clone --depth 1 --branch "%TARGET_REPO_BRANCH%" "%TARGET_REPO_URL%" "%TARGET_DIR%"
-  if errorlevel 1 exit /b %ERRORLEVEL%
-) else (
-  echo Refreshing target branch: %TARGET_REPO_BRANCH%
-  git -C "%TARGET_DIR%" fetch --depth 1 origin "%TARGET_REPO_BRANCH%"
-  if errorlevel 1 exit /b %ERRORLEVEL%
-
-  git -C "%TARGET_DIR%" reset --hard FETCH_HEAD
-  if errorlevel 1 exit /b %ERRORLEVEL%
-)
+if exist "%TARGET_DIR%\.git" goto refresh_target
+echo Cloning target branch: %TARGET_REPO_BRANCH%
+git clone --depth 1 --branch "%TARGET_REPO_BRANCH%" "%TARGET_REPO_URL%" "%TARGET_DIR%"
+if errorlevel 1 exit /b %ERRORLEVEL%
+goto after_target
+:refresh_target
+echo Refreshing target branch: %TARGET_REPO_BRANCH%
+git -C "%TARGET_DIR%" fetch --depth 1 origin "%TARGET_REPO_BRANCH%"
+if errorlevel 1 exit /b %ERRORLEVEL%
+git -C "%TARGET_DIR%" reset --hard FETCH_HEAD
+if errorlevel 1 exit /b %ERRORLEVEL%
+:after_target
 
 rem Use glog.cmd so the wrapper picks pwsh or Windows PowerShell automatically.
-rem Add --lang only when SCAN_LANG is defined.
-if defined SCAN_LANG (
-  echo Language filter: %SCAN_LANG%
-  echo Starting scan for: %TARGET_DIR%
-  echo SARIF upload to Glog server: enabled (-u)
-  call "%GLOG_ACTION_DIR%\glog.cmd" scan --path "%TARGET_DIR%" --client "%GLOG_CLIENT%" --env "%GLOG_ENV%" --glogtoken "%GLOG_TOKEN%" --registry "ghcr.io/glogai/" --lang "%SCAN_LANG%" --sarif-format-type AZURE -u
-) else (
-  echo Language filter: auto-detect
-  echo Starting scan for: %TARGET_DIR%
-  echo SARIF upload to Glog server: enabled (-u)
-  call "%GLOG_ACTION_DIR%\glog.cmd" scan --path "%TARGET_DIR%" --client "%GLOG_CLIENT%" --env "%GLOG_ENV%" --glogtoken "%GLOG_TOKEN%" --registry "ghcr.io/glogai/" --sarif-format-type AZURE -u
-)
+rem Avoid a parenthesized if/else here; cmd.exe can misparse blocks when expanded values contain special characters.
+if defined SCAN_LANG echo Language filter: %SCAN_LANG%
+if not defined SCAN_LANG echo Language filter: auto-detect
+echo Starting scan for: %TARGET_DIR%
+echo SARIF upload to Glog server: enabled (-u)
+if defined SCAN_LANG call "%GLOG_ACTION_DIR%\glog.cmd" scan --path "%TARGET_DIR%" --client "%GLOG_CLIENT%" --env "%GLOG_ENV%" --glogtoken "%GLOG_TOKEN%" --registry "ghcr.io/glogai/" --lang "%SCAN_LANG%" --sarif-format-type AZURE -u
+if not defined SCAN_LANG call "%GLOG_ACTION_DIR%\glog.cmd" scan --path "%TARGET_DIR%" --client "%GLOG_CLIENT%" --env "%GLOG_ENV%" --glogtoken "%GLOG_TOKEN%" --registry "ghcr.io/glogai/" --sarif-format-type AZURE -u
 if errorlevel 1 exit /b %ERRORLEVEL%
 ```
 
@@ -522,6 +512,10 @@ Set them in Jenkins as environment variables or credentials bindings. Do not exp
 ### Token or full scan command appears in the Jenkins log
 
 If the log contains the full `glog.cmd scan ... --glogtoken ...` command line, command echo was re-enabled somewhere around the batch step. The current example keeps `@echo off` in place and emits only explicit `echo` progress messages so token-bearing commands are not written to the Jenkins log.
+
+### Both scan variants run, or clone/check blocks behave unexpectedly
+
+This is usually a `cmd.exe` parsing problem, not a Jenkins condition problem. Parenthesized blocks that expand path variables such as `%WORKSPACE%`, `%TARGET_DIR%`, or `%SARIF_FILE%` can be misparsed when those values contain characters like `(` or `)`, which is common when job names appear in workspace paths. The current example avoids that by using labels for clone/refresh flow, single-line `if defined` checks for the scan command, and `$env:SARIF_FILE` inside the PowerShell parser.
 
 ### `glog-action` or the scan target repository was not checked out
 
