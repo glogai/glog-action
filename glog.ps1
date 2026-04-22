@@ -37,6 +37,7 @@ Options:
   --ignore PATTERN          Patterns to ignore
   --sarif-format-type TYPE  Default: GITHUB
   --files FILE1,FILE2       Comma-separated list of files to scan relative to --path
+  -u|--upload               Upload scan results to On-Prem Dashboard
 '@ | Write-Output
 }
 
@@ -218,7 +219,8 @@ function Invoke-ScanLang {
         [Parameter(Mandatory = $true)][string]$EnvironmentName,
         [Parameter(Mandatory = $true)][string]$Registry,
         [Parameter(Mandatory = $true)][string]$SarifFormatType,
-        [Parameter(Mandatory = $true)][string]$GlogToken
+        [Parameter(Mandatory = $true)][string]$GlogToken,
+        [Parameter(Mandatory = $true)][string]$ResolverUpload
     )
 
     if (-not $imageMap.ContainsKey($Lang)) {
@@ -259,6 +261,7 @@ function Invoke-ScanLang {
                 '-e', "HOST_UID=$hostUid",
                 '-e', "HOST_GID=$hostGid",
                 '-e', "SARIF_FORMAT_TYPE=$SarifFormatType",
+                '-e', "RESOLVER_UPLOAD=$ResolverUpload",
                 '-e', "IGNORE=$Ignore",
                 '-e', "CLIENT=$Client",
                 '-e', "ENV=$EnvironmentName",
@@ -317,6 +320,7 @@ $registry = 'ghcr.io/glogai/'
 $projectPath = (Get-Location).Path
 $glogToken = if ($env:GLOG_TOKEN) { $env:GLOG_TOKEN } else { '' }
 $sarifFormatType = if ($env:SARIF_FORMAT_TYPE) { $env:SARIF_FORMAT_TYPE } else { 'GITHUB' }
+$resolverUpload = 'false'
 $files = [System.Collections.Generic.List[string]]::new()
 $tempScanDir = $null
 
@@ -395,6 +399,16 @@ while ($index -lt $scriptArgs.Count) {
             $index += 2
             continue
         }
+        '-u' {
+            $resolverUpload = 'true'
+            $index++
+            continue
+        }
+        '--upload' {
+            $resolverUpload = 'true'
+            $index++
+            continue
+        }
         '-h' {
             Show-Usage
             exit 0
@@ -450,7 +464,7 @@ try {
 
                 foreach ($lang in $languages) {
                     Write-Output "Analyzing language: $lang"
-                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken
+                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken -ResolverUpload $resolverUpload
                 }
 
                 Persist-ScopedScanArtifacts -ScanPath $scanPath -ProjectPath $projectPath
