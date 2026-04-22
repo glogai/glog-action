@@ -8,7 +8,7 @@ It is the Windows counterpart to [Jenkins-Linux.md](Jenkins-Linux.md), but it us
 
 - `cmd.exe` / `Execute Windows batch command`
 - [`glog.cmd`](glog.cmd) as the entry point
-- PowerShell only for parsing the generated SARIF file
+- PowerShell only for parsing the generated SARIF file through a checked-in helper script
 
 ## Contents
 
@@ -214,46 +214,9 @@ echo Missing SARIF file: %SARIF_FILE%
 exit /b 1
 :have_sarif
 
-rem Parse the generated SARIF in one standalone PowerShell command.
+rem Parse the generated SARIF with the checked-in helper script.
 echo Parsing SARIF summary...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$path = $env:SARIF_FILE; ^
-  try { ^
-    $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop; ^
-    $sarif = ConvertFrom-Json -InputObject $raw -ErrorAction Stop ^
-  } catch { ^
-    Write-Error $_; ^
-    exit 1 ^
-  }; ^
-  $errors = 0; ^
-  $warnings = 0; ^
-  $notes = 0; ^
-  foreach ($run in $sarif.runs) { ^
-    foreach ($result in $run.results) { ^
-      $level = [string]$result.level; ^
-      if ([string]::IsNullOrWhiteSpace($level)) { $level = 'warning' } ^
-      switch ($level.ToLowerInvariant()) { ^
-        'error' { $errors++ } ^
-        'warning' { $warnings++ } ^
-        'note' { $notes++ } ^
-      } ^
-    } ^
-  }; ^
-  Write-Output ('SARIF summary: errors=' + $errors + ' warnings=' + $warnings + ' notes=' + $notes); ^
-  if ($errors -gt 0) { ^
-    Write-Output 'Error: SARIF contains error-level findings'; ^
-    if ($env:FAIL_ON_ERROR -ne 'false') { ^
-      Write-Output 'Blocking build because FAIL_ON_ERROR=true'; ^
-      exit 1 ^
-    } ^
-  }; ^
-  if ($warnings -gt 0) { ^
-    Write-Output 'Warning: SARIF contains warning-level findings'; ^
-    if ($env:FAIL_ON_WARNING -eq 'true') { ^
-      Write-Output 'Blocking build because FAIL_ON_WARNING=true'; ^
-      exit 1 ^
-    } ^
-  }"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%GLOG_ACTION_DIR%\Summarize-Sarif.ps1" -SarifFile "%SARIF_FILE%"
 if errorlevel 1 exit /b %ERRORLEVEL%
 
 exit /b 0
@@ -425,7 +388,7 @@ The original generated file remains in the workspace, typically at:
 
 ### Why is PowerShell still used in a batch job?
 
-Batch is adequate for orchestration, Git commands, and exit-code handling. It is poor at parsing JSON. The script uses a single standalone PowerShell command to read `glog-scan.sarif`, print the SARIF summary, and apply the `FAIL_ON_ERROR` / `FAIL_ON_WARNING` policy.
+Batch is adequate for orchestration, Git commands, and exit-code handling. It is poor at parsing JSON. The script calls the checked-in [`Summarize-Sarif.ps1`](Summarize-Sarif.ps1) helper to read `glog-scan.sarif`, print the SARIF summary, and apply the `FAIL_ON_ERROR` / `FAIL_ON_WARNING` policy.
 
 ### Why clone both repositories in the batch step?
 
@@ -497,7 +460,11 @@ This is usually a `cmd.exe` parsing problem, not a Jenkins condition problem. Pa
 
 ### `) was unexpected at this time.` during SARIF parsing
 
-That error comes from `cmd.exe`, not from the SARIF file itself. The usual cause is a `for /f` or `if (...)` batch block that embeds complex PowerShell code or path values containing `(` or `)`. The current example avoids `for /f` for SARIF parsing and runs one standalone PowerShell command instead.
+That error comes from `cmd.exe`, not from the SARIF file itself. The usual cause is a `for /f` or `if (...)` batch block that embeds complex PowerShell code or path values containing `(` or `)`. The current example avoids `for /f` for SARIF parsing and calls the checked-in PowerShell helper instead.
+
+### `^` is not recognized or `'try' is not recognized as an internal or external command`
+
+That failure means `cmd.exe` split an embedded multiline PowerShell command instead of passing it through as one script. Older inline examples that use `powershell -Command ^` are brittle in Jenkins batch steps. Use the current example, which calls [`Summarize-Sarif.ps1`](Summarize-Sarif.ps1) with `-File` and `-SarifFile`, so `cmd.exe` does not have to parse multiline PowerShell at all.
 
 ### `glog-action` or the scan target repository was not checked out
 
