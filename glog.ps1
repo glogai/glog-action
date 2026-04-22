@@ -56,12 +56,12 @@ function Get-RelativePath {
     $resolvedBase = Get-AbsolutePath -PathValue $BasePath
     $resolvedTarget = Get-AbsolutePath -PathValue $TargetPath
 
-    $baseWithSlash = $resolvedBase.TrimEnd('\\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $baseWithSlash = $resolvedBase.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
     $baseUri = New-Object System.Uri($baseWithSlash)
     $targetUri = New-Object System.Uri($resolvedTarget)
     $relative = $baseUri.MakeRelativeUri($targetUri)
 
-    return [System.Uri]::UnescapeDataString($relative.ToString()) -replace '/', [System.IO.Path]::DirectorySeparatorChar
+    return [System.Uri]::UnescapeDataString($relative.ToString()).Replace([System.IO.Path]::AltDirectorySeparatorChar, [System.IO.Path]::DirectorySeparatorChar)
 }
 
 function Get-HostIdValue {
