@@ -80,7 +80,7 @@ runs:
         TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE/${{ inputs.path }} --registry ghcr.io/glogai/" 
         ARGS=()
         if [ ! -z "${{ inputs.lang }}" ]; then
-          ARGS+=("--lang" "$(printf '%q' "${{ inputs.lang }}")")
+          ARGS+=("--lang" "${{ inputs.lang }}")
         fi
         if [ ! -z "${{ inputs.ignore }}" ]; then
           ARGS+=("--ignore" "$(printf '%q' "${{ inputs.ignore }}")")
