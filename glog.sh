@@ -19,6 +19,9 @@ declare -A IMAGE_MAP=(
   #[docker]="glog-scan-docker-b5ea"
   [objectscript]="glog-scan-objectscript-b977"
   [go]="glog-scan-go-cb38 glog-scan-go-c6d3"
+  # CycloneDX SBOM generator (cdxgen). Writes /app/.glog/sbom.cdx.json which
+  # the resolver (running after) uploads to /api/sca/resolver/sbom/.
+  [sbom]="glog-scan-sbom-9828"
 )
 
 usage() {
@@ -153,6 +156,7 @@ scan_lang() {
 
   local image_list="${IMAGE_MAP[$lang]:-}"
   if [[ -z "$image_list" ]]; then
+    echo "  (skipping '$lang': no scanner image mapped — use --sbom / --inventory flags, not --lang)"
     return 0
   fi
 
@@ -163,8 +167,21 @@ scan_lang() {
         docker volume create "${GLOG_DEPSCAN_VDB_VOLUME}"
       fi
     fi
+
+    EXTRA_ARGS=()
+    if [[ "$image_name" == glog-scan-sbom-9828* ]]; then
+      # SBOM (cdxgen + mvnw) needs network egress to Maven Central / npm registry
+      # and a persistent Maven cache to avoid re-downloading plugins each run.
+      EXTRA_ARGS+=(--network host)
+      mkdir -p "${HOME}/.glog-m2"
+      EXTRA_ARGS+=(-v "${HOME}/.glog-m2:/root/.m2")
+      EXTRA_ARGS+=(-e CDXGEN_TIMEOUT_MS=600000)
+      EXTRA_ARGS+=(-e FETCH_LICENSE=false)
+    fi
+
     echo "--> Running scanner: ${registry}${image_name}"
     docker run --pull always --rm \
+      "${EXTRA_ARGS[@]}" \
       -e GLOGSERVICE="${GLOG_TOKEN}" \
       -e GLOG_TOKEN="${GLOG_TOKEN}" \
       -e HOST_UID="$(id -u)" \
@@ -216,7 +233,17 @@ while [[ $# -gt 0 ]]; do
     clean|scan) COMMANDS+=("$1"); shift ;;
     --path) PROJECT_PATH="$2"; shift 2 ;;
     --files) IFS=',' read -r -a FILES <<< "$2"; shift 2 ;;
-    --lang) IFS=',' read -r -a LANGUAGES <<< "$2"; shift 2 ;;
+    --lang)
+      IFS=',' read -r -a _LANG_RAW <<< "$2"
+      LANGUAGES=()
+      for _l in "${_LANG_RAW[@]}"; do
+        case "$_l" in
+          sbom)      WITH_SBOM=true ;;
+          inventory) FORCE_INVENTORY=true ;;
+          *)         LANGUAGES+=("$_l") ;;
+        esac
+      done
+      shift 2 ;;
     --client) CLIENT="$2"; shift 2 ;;
     --env) ENV="$2"; shift 2 ;;
     --glogtoken) GLOG_TOKEN="$2"; shift 2 ;;
@@ -234,6 +261,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 export WITH_SBOM SBOM_ONLY SCL_UUID FORCE_INVENTORY
+
+echo "Glog scan options: WITH_SBOM=$WITH_SBOM SBOM_ONLY=$SBOM_ONLY FORCE_INVENTORY=$FORCE_INVENTORY RESOLVER_UPLOAD=$RESOLVER_UPLOAD SCL_UUID=${SCL_UUID:-<auto>}"
+if [[ "$WITH_SBOM" == "true" && "$RESOLVER_UPLOAD" != "true" ]]; then
+  echo "Note: SBOM will be written locally to .glog/ only. To send it to the Glog server pass on-prem-upload=true."
+fi
 
 if [[ ${#COMMANDS[@]} -eq 0 ]]; then
   usage; exit 1
@@ -259,6 +291,14 @@ for cmd in "${COMMANDS[@]}"; do
       if [[ ${#LANGUAGES[@]} -eq 0 ]]; then
         # shellcheck disable=SC2207
         LANGUAGES=($(detect_languages "$SCAN_PATH"))
+      fi
+
+      # SBOM must run BEFORE resolver so the resolver can pick up
+      # /app/.glog/sbom.cdx.json and upload it to /api/sca/resolver/sbom/.
+      if [[ "$WITH_SBOM" == "true" ]]; then
+        _HAS_SBOM=false
+        for _l in "${LANGUAGES[@]}"; do [[ "$_l" == "sbom" ]] && _HAS_SBOM=true; done
+        [[ "$_HAS_SBOM" == "false" ]] && LANGUAGES+=('sbom')
       fi
 
       LANGUAGES+=('resolver')

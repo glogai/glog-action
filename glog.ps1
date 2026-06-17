@@ -19,6 +19,9 @@ $imageMap = @{
     javascript   = @('glog-scan-javascript-0af1', 'glog-scan-javascript-3cb4')
     objectscript = @('glog-scan-objectscript-b977')
     go           = @('glog-scan-go-cb38', 'glog-scan-go-c6d3')
+    # CycloneDX SBOM generator (cdxgen). Writes /app/.glog/sbom.cdx.json which
+    # the resolver (running after) uploads to /api/sca/resolver/sbom/.
+    sbom         = @('glog-scan-sbom-9828')
 }
 
 function Show-Usage {
@@ -232,6 +235,7 @@ function Invoke-ScanLang {
     )
 
     if (-not $imageMap.ContainsKey($Lang)) {
+        Write-Output "  (skipping '$Lang': no scanner image mapped - use --sbom / --inventory flags, not --lang)"
         return
     }
 
@@ -262,8 +266,22 @@ function Invoke-ScanLang {
         foreach ($imageName in $imageMap[$Lang]) {
             Write-Output "--> Running scanner: $Registry$imageName"
 
+            $extraArgs = @()
+            if ($imageName -like 'glog-scan-sbom-9828*') {
+                # SBOM (cdxgen + mvnw) needs network egress to Maven Central / npm registry
+                # and a persistent Maven cache to avoid re-downloading plugins each run.
+                $homeDir = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+                $m2Dir = Join-Path -Path $homeDir -ChildPath '.glog-m2'
+                New-Item -ItemType Directory -Path $m2Dir -Force | Out-Null
+                $extraArgs += @('--network', 'host')
+                $extraArgs += @('-v', "${m2Dir}:/root/.m2")
+                $extraArgs += @('-e', 'CDXGEN_TIMEOUT_MS=600000')
+                $extraArgs += @('-e', 'FETCH_LICENSE=false')
+            }
+
             $dockerArgs = @(
-                'run', '--pull', 'always', '--rm',
+                'run', '--pull', 'always', '--rm'
+            ) + $extraArgs + @(
                 '-e', "GLOGSERVICE=$GlogToken",
                 '-e', "GLOG_TOKEN=$GlogToken",
                 '-e', "HOST_UID=$hostUid",
@@ -376,7 +394,12 @@ while ($index -lt $scriptArgs.Count) {
         '--lang' {
             if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --lang' }
             foreach ($item in ($scriptArgs[$index + 1] -split ',')) {
-                [void]$languages.Add($item)
+                $trim = $item.Trim()
+                switch ($trim) {
+                    'sbom'      { $withSbom = 'true' }
+                    'inventory' { $forceInventory = $true }
+                    default     { if ($trim) { [void]$languages.Add($trim) } }
+                }
             }
             $index += 2
             continue
@@ -500,10 +523,21 @@ try {
                     }
                 }
 
+                # SBOM must run BEFORE resolver so the resolver can pick up
+                # /app/.glog/sbom.cdx.json and upload it to /api/sca/resolver/sbom/.
+                if ($withSbom -eq 'true' -and -not ($languages -contains 'sbom')) {
+                    [void]$languages.Add('sbom')
+                }
+
                 [void]$languages.Add('resolver')
 
                 $sbomMode = if ($resolverUpload -eq 'true') { 'persist' } else { 'stateless' }
                 $forceInventoryFlag = if ($forceInventory) { 'true' } else { 'false' }
+
+                Write-Output "Glog scan options: WITH_SBOM=$withSbom SBOM_ONLY=$sbomOnly FORCE_INVENTORY=$forceInventoryFlag RESOLVER_UPLOAD=$resolverUpload SCL_UUID=$(if ($sclUuid) { $sclUuid } else { '<auto>' })"
+                if ($withSbom -eq 'true' -and $resolverUpload -ne 'true') {
+                    Write-Output 'Note: SBOM will be written locally to .glog/ only. To send it to the Glog server pass on-prem-upload=true.'
+                }
 
                 foreach ($lang in $languages) {
                     Write-Output "Analyzing language: $lang"
