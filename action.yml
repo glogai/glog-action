@@ -53,6 +53,21 @@ inputs:
   files:
     description: "List of files to scan separated by a comma e.g.: src/A.java,src/B.java"
     required: false
+  inventory:
+    description: "Force the inventory scanner to run regardless of language auto-detection. Default is false."
+    required: false
+    default: 'false'
+  sbom:
+    description: "Generate a CycloneDX SBOM via the resolver scanner (passes --with-sbom). If on-prem-upload=true the SBOM is also persisted on the server alongside the SARIF; otherwise it stays local in .glog/. Default is false."
+    required: false
+    default: 'false'
+  sbom-only:
+    description: "Skip SARIF and only produce the SBOM (passes --sbom-only to the resolver). Implies sbom=true. Default is false."
+    required: false
+    default: 'false'
+  scl-uuid:
+    description: "Source Code Location UUID to bind scan results (SARIF/SBOM) to on the Glog server. If omitted, the server tries to match an existing SCL from the scan metadata and creates one if no match is found."
+    required: false
 runs:
   using: "composite"
   steps:
@@ -96,6 +111,18 @@ runs:
         fi
         if [ "${{ inputs.on-prem-upload }}" = "true" ]; then
           ARGS+=("--upload")
+        fi
+        if [ "${{ inputs.inventory }}" = "true" ]; then
+          ARGS+=("--inventory")
+        fi
+        if [ "${{ inputs.sbom }}" = "true" ] || [ "${{ inputs.sbom-only }}" = "true" ]; then
+          ARGS+=("--sbom")
+        fi
+        if [ "${{ inputs.sbom-only }}" = "true" ]; then
+          ARGS+=("--sbom-only")
+        fi
+        if [ -n "${{ inputs.scl-uuid }}" ]; then
+          ARGS+=("--scl-uuid" "${{ inputs.scl-uuid }}")
         fi
         $TOOL_CMD "${ARGS[@]}"
       shell: bash

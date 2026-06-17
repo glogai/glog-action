@@ -174,11 +174,62 @@ If you see `Unable to upload "./.glog/glog-scan.sarif" as it is not valid SARIF`
 | `client` | No | - | Client name forwarded to the scanner containers. |
 | `env` | No | - | Environment suffix, for example `dev` for `https://<client>.dev.glog.ai`. |
 | `debug` | No | `false` | Stages `.glog/glog-scan.log` in addition to the SARIF report. |
-| `upload` | No | `true` | Uploads `<path>/.glog/glog-scan.sarif` to GitHub code scanning. If GitHub rejects the file as invalid SARIF, set this to `false`. |
+| `upload` | No | `true` | Uploads `<path>/.glog/glog-scan.sarif` to **GitHub code scanning**. If GitHub rejects the file as invalid SARIF, set this to `false`. |
+| `on-prem-upload` | No | `false` | Uploads SARIF (and SBOM if `sbom: true`) to the **Glog on-prem dashboard**. Independent from `upload` above. |
+| `inventory` | No | `false` | Forces the `inventory` scanner to run in addition to auto-detected languages. Use when you want components/dependencies inventoried even though no language triggers it. |
+| `sbom` | No | `false` | Generates a CycloneDX SBOM via the resolver scanner (`--with-sbom`). The SBOM is written under `<path>/.glog/` as `*.cdx.json`. If `on-prem-upload: true`, the SBOM is also persisted on the Glog server alongside the SARIF (`persist` mode); otherwise it stays local (`stateless` mode). |
+| `sbom-only` | No | `false` | Skip SARIF and only produce the SBOM (passes `--sbom-only` to the resolver). Implies `sbom: true`. |
+| `scl-uuid` | No | - | Source Code Location UUID on the Glog server to bind SARIF/SBOM uploads to. If omitted, the server tries to match an existing SCL from the scan metadata; if no match is found, a new SCL is created automatically by the resolver. |
 | `issue` | No | `false` | Creates or updates GitHub issues from SARIF findings, deduplicated by fingerprint. |
 | `autofix` | No | `false` | Assigns newly created issues to `copilot-swe-agent[bot]`. This is only meaningful when `issue: true`. |
 | `max-issues` | No | `30` | Maximum number of SARIF findings converted into issues in one run. |
 | `max-assign` | No | `30` | Maximum number of newly created issues assigned to Copilot in one run. |
+
+### Inventory & SBOM examples
+
+Generate an SBOM and push it (with the SARIF) to the on-prem Glog dashboard, bound to a known Source Code Location:
+
+```yaml
+- name: Run Glog.AI
+  uses: ./.github/glog-action
+  with:
+    client: 'acme'
+    env: 'dev'
+    inventory: 'true'
+    sbom: 'true'
+    on-prem-upload: 'true'
+    scl-uuid: '92c3d09d-bfad-4ca7-a4a7-d22e8b4462f7'
+    github-token: ${{ secrets.PAT_TOKEN }}
+    glog-token: ${{ secrets.GLOG_TOKEN }}
+```
+
+Let the server auto-match or auto-create the inventory entry (omit `scl-uuid`):
+
+```yaml
+- name: Run Glog.AI
+  uses: ./.github/glog-action
+  with:
+    client: 'acme'
+    inventory: 'true'
+    sbom: 'true'
+    on-prem-upload: 'true'
+    github-token: ${{ secrets.PAT_TOKEN }}
+    glog-token: ${{ secrets.GLOG_TOKEN }}
+```
+
+Produce only an SBOM locally (no SARIF, no upload):
+
+```yaml
+- name: Generate SBOM
+  uses: ./.github/glog-action
+  with:
+    sbom-only: 'true'
+    upload: 'false'
+    glog-token: ${{ secrets.GLOG_TOKEN }}
+```
+
+> **Note:** `upload` controls the **GitHub code scanning** upload of SARIF. `on-prem-upload` controls the **Glog server** upload of SARIF and (when enabled) SBOM. The two are independent — you can enable either, both, or neither.
+
 
 ## Generated Files and Side Effects
 

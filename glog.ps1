@@ -37,7 +37,11 @@ Options:
   --ignore PATTERN          Patterns to ignore
   --sarif-format-type TYPE  Default: GITHUB
   --files FILE1,FILE2       Comma-separated list of files to scan relative to --path
-  -u|--upload               Upload scan results to On-Prem Dashboard
+  -u|--upload               Upload scan results to On-Prem Dashboard (SARIF, and SBOM if --sbom)
+  --inventory               Force the inventory scanner to run (in addition to detected languages)
+  --sbom                    Generate a CycloneDX SBOM via resolver (--with-sbom)
+  --sbom-only               Skip SARIF, only produce the SBOM (implies --sbom)
+  --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
 '@ | Write-Output
 }
 
@@ -220,7 +224,11 @@ function Invoke-ScanLang {
         [Parameter(Mandatory = $true)][string]$Registry,
         [Parameter(Mandatory = $true)][string]$SarifFormatType,
         [Parameter(Mandatory = $true)][string]$GlogToken,
-        [Parameter(Mandatory = $true)][string]$ResolverUpload
+        [Parameter(Mandatory = $true)][string]$ResolverUpload,
+        [AllowEmptyString()][string]$WithSbom = 'false',
+        [AllowEmptyString()][string]$SbomOnly = 'false',
+        [AllowEmptyString()][string]$SbomMode = 'stateless',
+        [AllowEmptyString()][string]$SclUuid = ''
     )
 
     if (-not $imageMap.ContainsKey($Lang)) {
@@ -262,6 +270,10 @@ function Invoke-ScanLang {
                 '-e', "HOST_GID=$hostGid",
                 '-e', "SARIF_FORMAT_TYPE=$SarifFormatType",
                 '-e', "RESOLVER_UPLOAD=$ResolverUpload",
+                '-e', "WITH_SBOM=$WithSbom",
+                '-e', "SBOM_ONLY=$SbomOnly",
+                '-e', "SBOM_MODE=$SbomMode",
+                '-e', "SCL_UUID=$SclUuid",
                 '-e', "IGNORE=$Ignore",
                 '-e', "CLIENT=$Client",
                 '-e', "ENV=$EnvironmentName",
@@ -323,6 +335,10 @@ $sarifFormatType = if ($env:SARIF_FORMAT_TYPE) { $env:SARIF_FORMAT_TYPE } else {
 $resolverUpload = 'false'
 $files = [System.Collections.Generic.List[string]]::new()
 $tempScanDir = $null
+$withSbom = 'false'
+$sbomOnly = 'false'
+$sclUuid = ''
+$forceInventory = $false
 
 $scriptArgs = $args
 $index = 0
@@ -409,6 +425,28 @@ while ($index -lt $scriptArgs.Count) {
             $index++
             continue
         }
+        '--inventory' {
+            $forceInventory = $true
+            $index++
+            continue
+        }
+        '--sbom' {
+            $withSbom = 'true'
+            $index++
+            continue
+        }
+        '--sbom-only' {
+            $withSbom = 'true'
+            $sbomOnly = 'true'
+            $index++
+            continue
+        }
+        '--scl-uuid' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --scl-uuid' }
+            $sclUuid = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
         '-h' {
             Show-Usage
             exit 0
@@ -462,17 +500,27 @@ try {
 
                 [void]$languages.Add('resolver')
 
+                if ($forceInventory -and -not ($languages -contains 'inventory')) {
+                    [void]$languages.Add('inventory')
+                }
+
+                $sbomMode = if ($resolverUpload -eq 'true') { 'persist' } else { 'stateless' }
+
                 foreach ($lang in $languages) {
                     Write-Output "Analyzing language: $lang"
-                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken -ResolverUpload $resolverUpload
+                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken -ResolverUpload $resolverUpload -WithSbom $withSbom -SbomOnly $sbomOnly -SbomMode $sbomMode -SclUuid $sclUuid
                 }
 
                 Persist-ScopedScanArtifacts -ScanPath $scanPath -ProjectPath $projectPath
 
                 $glogDir = Join-Path -Path $projectPath -ChildPath '.glog'
                 if (Test-Path -LiteralPath $glogDir -PathType Container) {
+                    $keepPatterns = @('glog-scan.sarif', '*.cdx.json', '*.vdr.json', 'sbom*.json')
                     Get-ChildItem -LiteralPath $glogDir -Force |
-                        Where-Object { $_.Name -ne 'glog-scan.sarif' } |
+                        Where-Object {
+                            $name = $_.Name
+                            -not ($keepPatterns | Where-Object { $name -like $_ })
+                        } |
                         Remove-Item -Recurse -Force
                     Write-Output "Removed intermediate artifacts from $glogDir"
                 }

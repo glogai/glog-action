@@ -37,7 +37,11 @@ Options:
   --ignore PATTERN          Patterns to ignore
   --sarif-format-type TYPE   Default: GITHUB
   --files FILE1,FILE2      Comma-separated list of files to scan relative to --path
-  -u|--upload               Upload scan results to On-Prem Dashboard
+  -u|--upload               Upload scan results to On-Prem Dashboard (SARIF, and SBOM if --sbom)
+  --inventory               Force the inventory scanner to run (in addition to detected languages)
+  --sbom                    Generate a CycloneDX SBOM via resolver (--with-sbom)
+  --sbom-only               Skip SARIF, only produce the SBOM (implies --sbom)
+  --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
 
 EOF
 }
@@ -168,6 +172,10 @@ scan_lang() {
       -e HOST_GID="$(id -g)" \
       -e SARIF_FORMAT_TYPE="$sarif_format_type" \
       -e RESOLVER_UPLOAD="$resolver_upload" \
+      -e WITH_SBOM="${WITH_SBOM:-false}" \
+      -e SBOM_ONLY="${SBOM_ONLY:-false}" \
+      -e SBOM_MODE="$([ "$resolver_upload" = "true" ] && echo persist || echo stateless)" \
+      -e SCL_UUID="${SCL_UUID:-}" \
       -e IGNORE="$ignore" \
       -e CLIENT="$client" \
       -e ENV="$env" \
@@ -197,6 +205,10 @@ SARIF_FORMAT_TYPE="${SARIF_FORMAT_TYPE:-GITHUB}"
 FILES=()
 TEMP_SCAN_DIR=""
 RESOLVER_UPLOAD=false
+WITH_SBOM=false
+SBOM_ONLY=false
+SCL_UUID=""
+FORCE_INVENTORY=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -211,10 +223,16 @@ while [[ $# -gt 0 ]]; do
     --registry) REGISTRY="$2"; shift 2 ;;
     --sarif-format-type) SARIF_FORMAT_TYPE="$2"; shift 2 ;;
      -u|--upload) RESOLVER_UPLOAD=true; shift ;;
+    --inventory) FORCE_INVENTORY=true; shift ;;
+    --sbom) WITH_SBOM=true; shift ;;
+    --sbom-only) SBOM_ONLY=true; WITH_SBOM=true; shift ;;
+    --scl-uuid) SCL_UUID="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
 done
+
+export WITH_SBOM SBOM_ONLY SCL_UUID
 
 if [[ ${#COMMANDS[@]} -eq 0 ]]; then
   usage; exit 1
@@ -243,6 +261,12 @@ for cmd in "${COMMANDS[@]}"; do
       fi
 
       LANGUAGES+=('resolver')
+
+      if [[ "$FORCE_INVENTORY" == "true" ]]; then
+        if [[ ! " ${LANGUAGES[*]} " =~ " inventory " ]]; then
+          LANGUAGES+=('inventory')
+        fi
+      fi
 
       for lang in "${LANGUAGES[@]}"; do
         echo "Analyzing language: $lang"

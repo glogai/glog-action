@@ -219,7 +219,58 @@ Examples:
 --sarif-format-type STANDARD
 ```
 
+### `-u`, `--upload`
+
+Upload scan results to the **Glog on-prem dashboard**. Sets `RESOLVER_UPLOAD=true` for the scanner containers. When combined with `--sbom`, the generated SBOM is also persisted on the server (`SBOM_MODE=persist`); otherwise the SBOM stays local (`SBOM_MODE=stateless`).
+
+This is independent from the GitHub code-scanning SARIF upload exposed by the GitHub Action (`upload` input).
+
+### `--inventory`
+
+Forces the `inventory` scanner to run in addition to the auto-detected languages. Use when you want components/dependencies inventoried even though no language triggers it.
+
+Example:
+
+```bash
+--inventory
+```
+
+### `--sbom`
+
+Generates a CycloneDX SBOM via the resolver scanner (passes `WITH_SBOM=true`, which the resolver image consumes as `--with-sbom`). The SBOM is written under `<path>/.glog/` as `*.cdx.json`.
+
+Combine with `--upload` to also persist the SBOM on the Glog server alongside the SARIF.
+
+Example:
+
+```bash
+--sbom
+--sbom --upload
+```
+
+### `--sbom-only`
+
+Skip SARIF and only produce the SBOM (sets `SBOM_ONLY=true`, consumed by the resolver image as `--sbom-only`). Implies `--sbom`.
+
+Example:
+
+```bash
+--sbom-only
+```
+
+### `--scl-uuid UUID`
+
+Source Code Location UUID to bind SARIF/SBOM uploads to on the Glog server. If omitted, the server tries to match an existing SCL from the scan metadata and creates a new one automatically if no match is found.
+
+Example:
+
+```bash
+--scl-uuid 92c3d09d-bfad-4ca7-a4a7-d22e8b4462f7
+```
+
 ---
+
+
 
 ## Full examples
 
