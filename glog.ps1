@@ -2,7 +2,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$defaultLangs = @('cpp', 'java', 'javascript', 'python', 'kotlin', 'php', 'ruby', 'csharp', 'oss', 'terraform', 'secrets', 'resolver', 'inventory', 'objectscript', 'go')
+$defaultLangs = @('cpp', 'java', 'javascript', 'python', 'kotlin', 'php', 'ruby', 'csharp', 'oss', 'terraform', 'secrets', 'resolver', 'objectscript', 'go')
 
 $imageMap = @{
     oss          = @('glog-scan-oss-cc90')
@@ -10,7 +10,6 @@ $imageMap = @{
     ruby         = @('glog-scan-ruby-35d9')
     terraform    = @('glog-scan-terraform-51c8', 'glog-scan-terraform-6b93', 'glog-scan-terraform-8bd5')
     cpp          = @('glog-scan-cpp-c97a')
-    inventory    = @('glog-scan-inventory-5a5b')
     python       = @('glog-scan-python-5f95', 'glog-scan-python-0386', 'glog-scan-python-4166')
     secrets      = @('glog-scan-secrets-f27b')
     csharp       = @('glog-scan-csharp-b460', 'glog-scan-csharp-6c24')
@@ -228,7 +227,8 @@ function Invoke-ScanLang {
         [AllowEmptyString()][string]$WithSbom = 'false',
         [AllowEmptyString()][string]$SbomOnly = 'false',
         [AllowEmptyString()][string]$SbomMode = 'stateless',
-        [AllowEmptyString()][string]$SclUuid = ''
+        [AllowEmptyString()][string]$SclUuid = '',
+        [AllowEmptyString()][string]$ForceInventory = 'false'
     )
 
     if (-not $imageMap.ContainsKey($Lang)) {
@@ -273,6 +273,8 @@ function Invoke-ScanLang {
                 '-e', "WITH_SBOM=$WithSbom",
                 '-e', "SBOM_ONLY=$SbomOnly",
                 '-e', "SBOM_MODE=$SbomMode",
+                '-e', "FORCE_INVENTORY=$ForceInventory",
+                '-e', "WITH_INVENTORY=$ForceInventory",
                 '-e', "SCL_UUID=$SclUuid",
                 '-e', "IGNORE=$Ignore",
                 '-e', "CLIENT=$Client",
@@ -500,15 +502,12 @@ try {
 
                 [void]$languages.Add('resolver')
 
-                if ($forceInventory -and -not ($languages -contains 'inventory')) {
-                    [void]$languages.Add('inventory')
-                }
-
                 $sbomMode = if ($resolverUpload -eq 'true') { 'persist' } else { 'stateless' }
+                $forceInventoryFlag = if ($forceInventory) { 'true' } else { 'false' }
 
                 foreach ($lang in $languages) {
                     Write-Output "Analyzing language: $lang"
-                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken -ResolverUpload $resolverUpload -WithSbom $withSbom -SbomOnly $sbomOnly -SbomMode $sbomMode -SclUuid $sclUuid
+                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken -ResolverUpload $resolverUpload -WithSbom $withSbom -SbomOnly $sbomOnly -SbomMode $sbomMode -SclUuid $sclUuid -ForceInventory $forceInventoryFlag
                 }
 
                 Persist-ScopedScanArtifacts -ScanPath $scanPath -ProjectPath $projectPath

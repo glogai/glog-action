@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "inventory" "objectscript" "go") #"docker"
+DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "objectscript" "go") #"docker"
 
 declare -A IMAGE_MAP=(
   [oss]="glog-scan-oss-cc90"
@@ -9,7 +9,6 @@ declare -A IMAGE_MAP=(
   [ruby]="glog-scan-ruby-35d9"
   [terraform]="glog-scan-terraform-51c8 glog-scan-terraform-6b93 glog-scan-terraform-8bd5"
   [cpp]="glog-scan-cpp-c97a"
-  [inventory]="glog-scan-inventory-5a5b"
   [python]="glog-scan-python-5f95 glog-scan-python-0386 glog-scan-python-4166"
   [secrets]="glog-scan-secrets-f27b"
   [csharp]="glog-scan-csharp-b460 glog-scan-csharp-6c24"
@@ -175,6 +174,8 @@ scan_lang() {
       -e WITH_SBOM="${WITH_SBOM:-false}" \
       -e SBOM_ONLY="${SBOM_ONLY:-false}" \
       -e SBOM_MODE="$([ "$resolver_upload" = "true" ] && echo persist || echo stateless)" \
+      -e FORCE_INVENTORY="${FORCE_INVENTORY:-false}" \
+      -e WITH_INVENTORY="${FORCE_INVENTORY:-false}" \
       -e SCL_UUID="${SCL_UUID:-}" \
       -e IGNORE="$ignore" \
       -e CLIENT="$client" \
@@ -232,7 +233,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-export WITH_SBOM SBOM_ONLY SCL_UUID
+export WITH_SBOM SBOM_ONLY SCL_UUID FORCE_INVENTORY
 
 if [[ ${#COMMANDS[@]} -eq 0 ]]; then
   usage; exit 1
@@ -261,12 +262,6 @@ for cmd in "${COMMANDS[@]}"; do
       fi
 
       LANGUAGES+=('resolver')
-
-      if [[ "$FORCE_INVENTORY" == "true" ]]; then
-        if [[ ! " ${LANGUAGES[*]} " =~ " inventory " ]]; then
-          LANGUAGES+=('inventory')
-        fi
-      fi
 
       for lang in "${LANGUAGES[@]}"; do
         echo "Analyzing language: $lang"
