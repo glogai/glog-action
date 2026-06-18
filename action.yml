@@ -31,7 +31,7 @@ inputs:
     required: false
     default: '.'
   github-token:
-    description: "Optional GitHub token. Defaults to the workflow's built-in GITHUB_TOKEN (${{ github.token }}). Provide a PAT only if you need broader scopes (e.g. private GHCR pulls, cross-repo issue creation)."
+    description: "Optional GitHub token. If omitted, the workflow's built-in GITHUB_TOKEN is used automatically. Provide a PAT only if you need broader scopes (e.g. private GHCR pulls, cross-repo issue creation)."
     required: false
     default: ''
   glog-token:
