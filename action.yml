@@ -31,7 +31,9 @@ inputs:
     required: false
     default: '.'
   github-token:
+    description: "Optional GitHub token. Defaults to the workflow's built-in GITHUB_TOKEN (${{ github.token }}). Provide a PAT only if you need broader scopes (e.g. private GHCR pulls, cross-repo issue creation)."
     required: false
+    default: ''
   glog-token:
     required: true
   issue:
@@ -71,6 +73,97 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # Preflight: probe the resolved token's permissions and fail fast with a
+    # copy-pasteable `permissions:` block if anything required is missing.
+    - name: Preflight - verify GITHUB_TOKEN permissions
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
+        REPO: ${{ github.repository }}
+        NEED_ISSUES: ${{ inputs.issue }}
+        NEED_AUTOFIX: ${{ inputs.autofix }}
+        NEED_UPLOAD: ${{ inputs.upload }}
+        USER_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -u
+        api() {
+          # $1=method $2=path $3=body(optional)  -> prints HTTP status
+          local method="$1" path="$2" body="${3:-}"
+          local args=(-s -o /tmp/glog_preflight.out -w '%{http_code}'
+                      -X "$method"
+                      -H "Authorization: Bearer $GH_TOKEN"
+                      -H "Accept: application/vnd.github+json"
+                      -H "X-GitHub-Api-Version: 2022-11-28")
+          [ -n "$body" ] && args+=(-H "Content-Type: application/json" --data "$body")
+          curl "${args[@]}" "https://api.github.com$path" || echo "000"
+        }
+
+        missing=()
+
+        # contents:write -- needed for `git push` of the committed SARIF.
+        # Probe by creating a tiny blob (no ref impact, no visible artifact).
+        code=$(api POST "/repos/$REPO/git/blobs" '{"content":"glog-preflight","encoding":"utf-8"}')
+        if [ "$code" != "201" ] && [ "$code" != "200" ]; then
+          echo "::warning::contents:write probe returned HTTP $code"
+          missing+=("contents: write")
+        fi
+
+        # security-events:write -- only if SARIF upload to GitHub Security is on.
+        if [ "$NEED_UPLOAD" = "true" ]; then
+          code=$(api GET "/repos/$REPO/code-scanning/alerts?per_page=1")
+          # 200/404 OK; 403 means missing permission (or Advanced Security off on private repos).
+          if [ "$code" = "403" ]; then
+            missing+=("security-events: write")
+          fi
+        fi
+
+        # issues:write -- only if creating GitHub issues from SARIF.
+        if [ "$NEED_ISSUES" = "true" ]; then
+          code=$(api GET "/repos/$REPO/issues?per_page=1&state=all")
+          if [ "$code" = "403" ]; then
+            missing+=("issues: write")
+          fi
+        fi
+
+        # pull-requests:write -- only if Copilot autofix PR creation is on.
+        if [ "$NEED_AUTOFIX" = "true" ]; then
+          code=$(api GET "/repos/$REPO/pulls?per_page=1&state=all")
+          if [ "$code" = "403" ]; then
+            missing+=("pull-requests: write")
+          fi
+        fi
+
+        if [ ${#missing[@]} -eq 0 ]; then
+          echo "Glog preflight OK - token has the required permissions."
+          exit 0
+        fi
+
+        {
+          echo "::error title=Glog.AI: GITHUB_TOKEN is missing required permissions::"
+          echo ""
+          echo "The workflow's GITHUB_TOKEN does not have all the permissions Glog.AI needs."
+          echo "Add the following block to your workflow (job-level is recommended):"
+          echo ""
+          echo "permissions:"
+          echo "  contents: write"
+          for p in "${missing[@]}"; do
+            case "$p" in
+              "contents: write") ;; # already printed
+              *) echo "  $p" ;;
+            esac
+          done
+          echo ""
+          echo "Then re-run the job. Alternatively, set Repo Settings -> Actions -> General ->"
+          echo "Workflow permissions to 'Read and write permissions' (covers contents/issues/PRs;"
+          echo "'security-events: write' still needs to be added to the workflow for SARIF upload)."
+          if [ -n "$USER_TOKEN" ]; then
+            echo ""
+            echo "Note: you provided a custom github-token (PAT). Make sure that PAT also has the"
+            echo "corresponding scopes (repo, security_events) and that SSO is authorized if applicable."
+          fi
+        } >&2
+        exit 1
+
     - name: Clean .glog directory
       run: |
         echo "Checking .glog directory..."
@@ -82,12 +175,23 @@ runs:
         fi
       shell: bash
 
+    # Optional: only needed when pulling glogai images from a private GHCR.
+    # Since glogai images on ghcr.io are now public, this step is skipped
+    # automatically when no github-token is provided.
     - name: Set up auth for pulling private actions
+      if: ${{ inputs.github-token != '' }}
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         GITHUB_ACTOR: ${{ github.actor }}
       run: |
-        echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        if [ -z "$GITHUB_TOKEN" ]; then
+          echo "No github-token provided; skipping ghcr.io login (assuming public images)."
+          exit 0
+        fi
+        echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin || {
+          echo "ghcr.io login failed; continuing assuming images are public."
+          exit 0
+        }
       shell: bash
 
     - name: Glog Scan
@@ -174,7 +278,7 @@ runs:
         SARIF_PATH: ${{ github.workspace }}/${{ inputs.path }}/.glog/glog-scan.sarif
         MAX_ISSUES_NUMBER: ${{ inputs.max-issues }}
       with:
-        github-token: ${{ inputs.github-token }}
+        github-token: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
         script: |
           const fs = require("fs");
 
@@ -339,7 +443,7 @@ runs:
       env:
         MAX_ASSIGN_NUMBER: ${{ inputs.max-assign }}
       with:
-        github-token: ${{ inputs.github-token }}
+        github-token: ${{ inputs.github-token != '' && inputs.github-token || github.token }}
         script: |
           const createdCsv = `${{ steps.upload-issues.outputs.created }}`.trim();
 
