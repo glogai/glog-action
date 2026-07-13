@@ -240,6 +240,13 @@ runs:
         git add $GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.sarif
       shell: bash
 
+    - name: Git Add report
+      run: |
+        git config --global user.name ${{ github.actor }} 
+        git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+        git add $GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-false-positive.sarif
+      shell: bash
+
     - name: Git Add debug log
       if: ${{ inputs.debug == 'true' }}
       run: git add $GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.log
