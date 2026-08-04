@@ -231,7 +231,9 @@ function Invoke-ScanLang {
         [AllowEmptyString()][string]$SbomOnly = 'false',
         [AllowEmptyString()][string]$SbomMode = 'stateless',
         [AllowEmptyString()][string]$SclUuid = '',
-        [AllowEmptyString()][string]$ForceInventory = 'false'
+        [AllowEmptyString()][string]$ForceInventory = 'false',
+        [AllowEmptyString()][string]$PrivacyTier = 'full',
+        [AllowEmptyString()][string]$ApiUrl = ''
     )
 
     if (-not $imageMap.ContainsKey($Lang)) {
@@ -294,11 +296,22 @@ function Invoke-ScanLang {
                 '-e', "FORCE_INVENTORY=$ForceInventory",
                 '-e', "WITH_INVENTORY=$ForceInventory",
                 '-e', "SCL_UUID=$SclUuid",
+                '-e', "PRIVACY_TIER=$PrivacyTier",
                 '-e', "IGNORE=$Ignore",
                 '-e', "CLIENT=$Client",
                 '-e', "ENV=$EnvironmentName",
-                '-e', "GLOG_IMAGE=$imageName"
+                '-e', "GLOG_IMAGE=$imageName",
+                '-e', "HOST_PROJECT_PATH=$resolvedScanPath",
+                '-e', ("GLOG_COMPONENT=" + $(if ($env:GLOG_COMPONENT) { $env:GLOG_COMPONENT } else { Split-Path -Leaf $resolvedScanPath })),
+                '-e', ("GLOG_BRANCH=" + $(foreach ($v in @($env:GLOG_BRANCH, $env:GITHUB_HEAD_REF, $env:GITHUB_REF_NAME, $env:BUILD_SOURCEBRANCHNAME, $env:CI_COMMIT_REF_NAME, $env:BRANCH_NAME)) { if ($v) { $v; break } }))
             )
+
+            if ($ApiUrl) {
+                $dockerArgs += @('-e', "GLOG_API_URL=$ApiUrl")
+            }
+
+
+
 
             if ($env:GLOG_DEPSCAN_VDB_VOLUME) {
                 $dockerArgs += @('-e', "GLOG_DEPSCAN_VDB_VOLUME=$($env:GLOG_DEPSCAN_VDB_VOLUME)")
@@ -359,6 +372,8 @@ $withSbom = 'false'
 $sbomOnly = 'false'
 $sclUuid = ''
 $forceInventory = $false
+$privacyTier = if ($env:PRIVACY_TIER) { $env:PRIVACY_TIER } else { 'full' }
+$apiUrl = if ($env:GLOG_API_URL) { $env:GLOG_API_URL } else { '' }
 
 $scriptArgs = $args
 $index = 0
@@ -472,6 +487,18 @@ while ($index -lt $scriptArgs.Count) {
             $index += 2
             continue
         }
+        '--privacy-tier' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --privacy-tier' }
+            $privacyTier = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
+        '--api-url' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --api-url' }
+            $apiUrl = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
         '-h' {
             Show-Usage
             exit 0
@@ -541,7 +568,8 @@ try {
 
                 foreach ($lang in $languages) {
                     Write-Output "Analyzing language: $lang"
-                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken -ResolverUpload $resolverUpload -WithSbom $withSbom -SbomOnly $sbomOnly -SbomMode $sbomMode -SclUuid $sclUuid -ForceInventory $forceInventoryFlag
+                    if ($privacyTier -notin @('full','metrics','none')) { throw "Invalid --privacy-tier: $privacyTier (expected: full, metrics, none)" }
+                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken -ResolverUpload $resolverUpload -WithSbom $withSbom -SbomOnly $sbomOnly -SbomMode $sbomMode -SclUuid $sclUuid -ForceInventory $forceInventoryFlag -PrivacyTier $privacyTier -ApiUrl $apiUrl
                 }
 
                 Persist-ScopedScanArtifacts -ScanPath $scanPath -ProjectPath $projectPath

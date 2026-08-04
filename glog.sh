@@ -44,6 +44,8 @@ Options:
   --sbom                    Generate a CycloneDX SBOM via resolver (--with-sbom)
   --sbom-only               Skip SARIF, only produce the SBOM (implies --sbom)
   --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
+  --privacy-tier TIER       full (default) | metrics | none. Controls what leaves the tenant.
+  --api-url URL             Override Glog.AI server URL (default: from image config)
 
 EOF
 }
@@ -153,6 +155,8 @@ scan_lang() {
   local registry=$6
   local sarif_format_type=$7
   local resolver_upload=$8
+  local privacy_tier=${9:-full}
+  local api_url=${10:-}
 
   local image_list="${IMAGE_MAP[$lang]:-}"
   if [[ -z "$image_list" ]]; then
@@ -194,16 +198,22 @@ scan_lang() {
       -e FORCE_INVENTORY="${FORCE_INVENTORY:-false}" \
       -e WITH_INVENTORY="${FORCE_INVENTORY:-false}" \
       -e SCL_UUID="${SCL_UUID:-}" \
+      -e PRIVACY_TIER="$privacy_tier" \
+      ${api_url:+-e GLOG_API_URL="$api_url"} \
       -e IGNORE="$ignore" \
       -e CLIENT="$client" \
       -e ENV="$env" \
       -e GLOG_IMAGE="$image_name" \
+      -e HOST_PROJECT_PATH="$path" \
+      -e GLOG_COMPONENT="${GLOG_COMPONENT:-$(basename "$path")}" \
+      -e GLOG_BRANCH="${GLOG_BRANCH:-${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-${BUILD_SOURCEBRANCHNAME:-${CI_COMMIT_REF_NAME:-${BRANCH_NAME:-}}}}}}" \
       ${GLOG_DEPSCAN_VDB_VOLUME:+-e GLOG_DEPSCAN_VDB_VOLUME="${GLOG_DEPSCAN_VDB_VOLUME}"} \
       ${VDB_APP_ONLY:+-e VDB_APP_ONLY="${VDB_APP_ONLY}"} \
       ${VDB_HOME:+-e VDB_HOME="${VDB_HOME}"} \
       ${VDB_DATABASE_URL:+-e VDB_DATABASE_URL="${VDB_DATABASE_URL}"} \
       ${VDB_AGE_HOURS:+-e VDB_AGE_HOURS="${VDB_AGE_HOURS}"} \
       -v "$path":/app \
+
       ${GLOG_DEPSCAN_VDB_VOLUME:+-v "${GLOG_DEPSCAN_VDB_VOLUME}:${VDB_HOME:-/vdb}"} \
       "${registry}${image_name}"
   done
@@ -227,6 +237,8 @@ WITH_SBOM=false
 SBOM_ONLY=false
 SCL_UUID=""
 FORCE_INVENTORY=false
+PRIVACY_TIER="${PRIVACY_TIER:-full}"
+GLOG_API_URL="${GLOG_API_URL:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -255,12 +267,19 @@ while [[ $# -gt 0 ]]; do
     --sbom) WITH_SBOM=true; shift ;;
     --sbom-only) SBOM_ONLY=true; WITH_SBOM=true; shift ;;
     --scl-uuid) SCL_UUID="$2"; shift 2 ;;
+    --privacy-tier) PRIVACY_TIER="$2"; shift 2 ;;
+    --api-url) GLOG_API_URL="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
 done
 
-export WITH_SBOM SBOM_ONLY SCL_UUID FORCE_INVENTORY
+case "$PRIVACY_TIER" in
+  full|metrics|none) ;;
+  *) echo "Invalid --privacy-tier: $PRIVACY_TIER (expected: full, metrics, none)"; exit 1 ;;
+esac
+
+export WITH_SBOM SBOM_ONLY SCL_UUID FORCE_INVENTORY PRIVACY_TIER GLOG_API_URL
 
 echo "Glog scan options: WITH_SBOM=$WITH_SBOM SBOM_ONLY=$SBOM_ONLY FORCE_INVENTORY=$FORCE_INVENTORY RESOLVER_UPLOAD=$RESOLVER_UPLOAD SCL_UUID=${SCL_UUID:-<auto>}"
 if [[ "$WITH_SBOM" == "true" && "$RESOLVER_UPLOAD" != "true" ]]; then
@@ -305,7 +324,7 @@ for cmd in "${COMMANDS[@]}"; do
 
       for lang in "${LANGUAGES[@]}"; do
         echo "Analyzing language: $lang"
-        scan_lang "$lang" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "$RESOLVER_UPLOAD"
+        scan_lang "$lang" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "$RESOLVER_UPLOAD" "$PRIVACY_TIER" "$GLOG_API_URL"
       done
 
       persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
