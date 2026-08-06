@@ -78,6 +78,15 @@ inputs:
     description: "Override the Glog.AI server URL (e.g. https://test.dev.glog.ai). If unset, the resolver uses the URL baked into the image."
     required: false
     default: ''
+  sarif-format-type:
+    description: "SARIF structure produced for this platform: GITHUB (GitHub Advanced Security / Security tab), AZURE, GITLAB or STANDARD (issues / plain commit). Default is GITHUB."
+    required: false
+    default: 'GITHUB'
+  server-sarif-format-type:
+    description: "Optional second SARIF format used for the upload to the Glog server (normally STANDARD). Set it when the platform needs a different structure than the server; the resolver then runs twice and the platform format is the one committed."
+    required: false
+    default: ''
+
 runs:
   using: "composite"
   steps:
@@ -242,6 +251,13 @@ runs:
         if [ -n "${{ inputs.api-url }}" ]; then
           ARGS+=("--api-url" "${{ inputs.api-url }}")
         fi
+        if [ -n "${{ inputs.sarif-format-type }}" ]; then
+          ARGS+=("--sarif-format-type" "${{ inputs.sarif-format-type }}")
+        fi
+        if [ -n "${{ inputs.server-sarif-format-type }}" ]; then
+          ARGS+=("--server-sarif-format-type" "${{ inputs.server-sarif-format-type }}")
+        fi
+
         $TOOL_CMD "${ARGS[@]}"
       shell: bash
       env:

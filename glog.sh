@@ -37,7 +37,9 @@ Options:
   --glogtoken TOKEN         Glog API Token
   --registry REGISTRY       Docker registry prefix (default: ghcr.io/glogai/)
   --ignore PATTERN          Patterns to ignore
-  --sarif-format-type TYPE   Default: GITHUB
+  --sarif-format-type TYPE   SARIF structure for this platform: GITHUB (default), AZURE, GITLAB, STANDARD
+  --server-sarif-format-type TYPE  Second SARIF format used for the server upload (usually STANDARD);
+                            when set and different, the resolver runs twice
   --files FILE1,FILE2      Comma-separated list of files to scan relative to --path
   -u|--upload               Upload scan results to On-Prem Dashboard (SARIF, and SBOM if --sbom)
   --inventory               Force the inventory scanner to run (in addition to detected languages)
@@ -213,8 +215,8 @@ scan_lang() {
       ${VDB_DATABASE_URL:+-e VDB_DATABASE_URL="${VDB_DATABASE_URL}"} \
       ${VDB_AGE_HOURS:+-e VDB_AGE_HOURS="${VDB_AGE_HOURS}"} \
       -v "$path":/app \
-
       ${GLOG_DEPSCAN_VDB_VOLUME:+-v "${GLOG_DEPSCAN_VDB_VOLUME}:${VDB_HOME:-/vdb}"} \
+
       "${registry}${image_name}"
   done
 }
@@ -230,6 +232,7 @@ REGISTRY="ghcr.io/glogai/"
 PROJECT_PATH="$(pwd)"
 GLOG_TOKEN="${GLOG_TOKEN:-}"
 SARIF_FORMAT_TYPE="${SARIF_FORMAT_TYPE:-GITHUB}"
+SERVER_SARIF_FORMAT_TYPE="${SERVER_SARIF_FORMAT_TYPE:-}"
 FILES=()
 TEMP_SCAN_DIR=""
 RESOLVER_UPLOAD=false
@@ -262,6 +265,7 @@ while [[ $# -gt 0 ]]; do
     --ignore) IGNORE="$2"; shift 2 ;;
     --registry) REGISTRY="$2"; shift 2 ;;
     --sarif-format-type) SARIF_FORMAT_TYPE="$2"; shift 2 ;;
+    --server-sarif-format-type) SERVER_SARIF_FORMAT_TYPE="$2"; shift 2 ;;
      -u|--upload) RESOLVER_UPLOAD=true; shift ;;
     --inventory) FORCE_INVENTORY=true; shift ;;
     --sbom) WITH_SBOM=true; shift ;;
@@ -320,12 +324,26 @@ for cmd in "${COMMANDS[@]}"; do
         [[ "$_HAS_SBOM" == "false" ]] && LANGUAGES+=('sbom')
       fi
 
-      LANGUAGES+=('resolver')
-
+      # Resolver passes. When the platform (committed / native SARIF UI) needs a
+      # different structure than the Glog server, the resolver runs twice:
+      #   1. server format, with upload  -> what the server ingests
+      #   2. platform format, no upload  -> what stays in .glog/ and gets committed
       for lang in "${LANGUAGES[@]}"; do
+        [[ "$lang" == "resolver" ]] && continue
         echo "Analyzing language: $lang"
-        scan_lang "$lang" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "$RESOLVER_UPLOAD" "$PRIVACY_TIER" "$GLOG_API_URL"
+        scan_lang "$lang" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "false" "$PRIVACY_TIER" "$GLOG_API_URL"
       done
+
+      if [[ -n "$SERVER_SARIF_FORMAT_TYPE" && "$SERVER_SARIF_FORMAT_TYPE" != "$SARIF_FORMAT_TYPE" && "$RESOLVER_UPLOAD" == "true" ]]; then
+        echo "Resolver pass 1/2: format=$SERVER_SARIF_FORMAT_TYPE (server upload)"
+        scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SERVER_SARIF_FORMAT_TYPE" "true" "$PRIVACY_TIER" "$GLOG_API_URL"
+        echo "Resolver pass 2/2: format=$SARIF_FORMAT_TYPE (local/platform artifact)"
+        scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "false" "$PRIVACY_TIER" "$GLOG_API_URL"
+      else
+        echo "Resolver pass: format=$SARIF_FORMAT_TYPE upload=$RESOLVER_UPLOAD"
+        scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "$RESOLVER_UPLOAD" "$PRIVACY_TIER" "$GLOG_API_URL"
+      fi
+
 
       persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
       ;;
