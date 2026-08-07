@@ -116,21 +116,36 @@ runs:
         }
 
         missing=()
+        warnings=()
 
         # contents:write -- needed for `git push` of the committed SARIF.
         # Probe by creating a tiny blob (no ref impact, no visible artifact).
         code=$(api POST "/repos/$REPO/git/blobs" '{"content":"glog-preflight","encoding":"utf-8"}')
         if [ "$code" != "201" ] && [ "$code" != "200" ]; then
-          echo "::warning::contents:write probe returned HTTP $code"
-          missing+=("contents: write")
+          echo "::warning::contents:write probe returned HTTP $code: $(head -c 300 /tmp/glog_preflight.out)"
+          if [ "$code" = "401" ]; then
+            missing+=("contents: write (token rejected - HTTP 401, check the PAT value / expiry)")
+          elif [ "$code" = "404" ]; then
+            missing+=("contents: write (HTTP 404 - the token cannot see $REPO; fine-grained PATs need Repository access + Contents: Read and write)")
+          else
+            missing+=("contents: write")
+          fi
         fi
 
         # security-events:write -- only if SARIF upload to GitHub Security is on.
+        # A 403 here is ambiguous: it can mean a missing permission OR that
+        # GitHub Advanced Security / Code Scanning is not enabled for the repo.
+        # Only the latter is not our problem, so classify by the API message.
         if [ "$NEED_UPLOAD" = "true" ]; then
           code=$(api GET "/repos/$REPO/code-scanning/alerts?per_page=1")
-          # 200/404 OK; 403 means missing permission (or Advanced Security off on private repos).
           if [ "$code" = "403" ]; then
-            missing+=("security-events: write")
+            body=$(head -c 400 /tmp/glog_preflight.out)
+            if echo "$body" | grep -qi "advanced security\|code scanning is not enabled\|not enabled for this repository"; then
+              warnings+=("Code Scanning / GitHub Advanced Security is not enabled for $REPO - the SARIF upload step will be skipped by GitHub. Enable Advanced Security or set upload:false.")
+            else
+              echo "::warning::security-events probe returned HTTP 403: $body"
+              missing+=("security-events: write")
+            fi
           fi
         fi
 
@@ -150,6 +165,10 @@ runs:
           fi
         fi
 
+        for w in "${warnings[@]:-}"; do
+          [ -n "$w" ] && echo "::warning title=Glog.AI preflight::$w"
+        done
+
         if [ ${#missing[@]} -eq 0 ]; then
           echo "Glog preflight OK - token has the required permissions."
           exit 0
@@ -158,14 +177,15 @@ runs:
         {
           echo "::error title=Glog.AI: GITHUB_TOKEN is missing required permissions::"
           echo ""
-          echo "The workflow's GITHUB_TOKEN does not have all the permissions Glog.AI needs."
+          echo "The token used by Glog.AI does not have all the required permissions."
           echo "Add the following block to your workflow (job-level is recommended):"
           echo ""
           echo "permissions:"
           echo "  contents: write"
+          echo "  packages: read"
           for p in "${missing[@]}"; do
             case "$p" in
-              "contents: write") ;; # already printed
+              contents:*) ;; # already printed above
               *) echo "  $p" ;;
             esac
           done
@@ -175,11 +195,16 @@ runs:
           echo "'security-events: write' still needs to be added to the workflow for SARIF upload)."
           if [ -n "$USER_TOKEN" ]; then
             echo ""
-            echo "Note: you provided a custom github-token (PAT). Make sure that PAT also has the"
-            echo "corresponding scopes (repo, security_events) and that SSO is authorized if applicable."
+            echo "Note: a custom github-token (PAT) was provided, and it is the token probed above."
+            echo "The workflow 'permissions:' block does NOT apply to a PAT - the PAT itself must"
+            echo "carry the rights: classic PAT -> scopes 'repo' + 'security_events' + 'read:packages';"
+            echo "fine-grained PAT -> repository access to $REPO with Contents: Read and write,"
+            echo "Code scanning alerts: Read and write, Issues: Read and write, Pull requests: Read and write."
+            echo "Also confirm SSO authorization for the organization if applicable."
           fi
         } >&2
         exit 1
+
 
     - name: Clean .glog directory
       run: |
