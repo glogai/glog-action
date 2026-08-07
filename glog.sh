@@ -216,7 +216,6 @@ scan_lang() {
       ${VDB_AGE_HOURS:+-e VDB_AGE_HOURS="${VDB_AGE_HOURS}"} \
       -v "$path":/app \
       ${GLOG_DEPSCAN_VDB_VOLUME:+-v "${GLOG_DEPSCAN_VDB_VOLUME}:${VDB_HOME:-/vdb}"} \
-
       "${registry}${image_name}"
   done
 }
