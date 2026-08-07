@@ -294,12 +294,19 @@ runs:
       run: |
         git config --global user.name ${{ github.actor }} 
         git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-        git add $GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.sarif
+        SARIF_PATH="$GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.sarif"
+        if [ -f "$SARIF_PATH" ]; then
+          git add -f "$SARIF_PATH"
+        else
+          echo "No SARIF report found at $SARIF_PATH, skipping."
+        fi
       shell: bash
 
     - name: Git Add debug log
       if: ${{ inputs.debug == 'true' }}
-      run: git add $GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.log
+      run: |
+        LOG_PATH="$GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.log"
+        [ -f "$LOG_PATH" ] && git add -f "$LOG_PATH" || echo "No debug log found, skipping."
       shell: bash
 
     - name: Check for staged file changes
