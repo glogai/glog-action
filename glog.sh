@@ -252,7 +252,6 @@ scan_lang() {
     fi
 
     docker run "${pull_args[@]}" --rm \
-
       "${EXTRA_ARGS[@]}" \
       -e GLOG_DEV="$DEV" \
       -e LOG_LEVEL="$([[ "$DEV" == true ]] && echo DEBUG || echo CRITICAL)" \
