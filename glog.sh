@@ -394,7 +394,9 @@ for cmd in "${COMMANDS[@]}"; do
         glog_log "Resolver pass 1/2: format=$SERVER_SARIF_FORMAT_TYPE (server upload)"
         scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SERVER_SARIF_FORMAT_TYPE" "true" "$PRIVACY_TIER" "$GLOG_API_URL"
         glog_log "Resolver pass 2/2: format=$SARIF_FORMAT_TYPE (local/platform artifact)"
-        scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "false" "$PRIVACY_TIER" "$GLOG_API_URL"
+        # This pass only rewrites the local platform artifact. Keep it fully
+        # offline so it cannot duplicate or fail an already-completed upload.
+        scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "false" "none" "$GLOG_API_URL"
       else
         glog_log "Resolver pass: format=$SARIF_FORMAT_TYPE upload=$RESOLVER_UPLOAD"
         scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "$RESOLVER_UPLOAD" "$PRIVACY_TIER" "$GLOG_API_URL"
