@@ -208,12 +208,8 @@ runs:
 
     - name: Clean .glog directory
       run: |
-        echo "Checking .glog directory..."
         if [ -d "$GITHUB_WORKSPACE/.glog" ]; then
-          echo ".glog directory exists. Cleaning up..."
           rm -rf "$GITHUB_WORKSPACE/.glog/"*
-        else
-          echo "$GITHUB_WORKSPACE .glog directory does not exist."
         fi
       shell: bash
 
@@ -305,7 +301,7 @@ runs:
           if ls "$GLOG_DIR"/*.cdx.json >/dev/null 2>&1; then
             echo "- SBOM: \`$(basename $(ls "$GLOG_DIR"/*.cdx.json | head -n1))\` present"
           elif [ "${{ inputs.sbom }}" = "true" ] || [ "${{ inputs.sbom-only }}" = "true" ]; then
-            echo "- SBOM: **missing** (SBOM generation produced no output — see the Glog Scan log for TOOL_FAILED / SBOM generation failed)"
+            echo "- SBOM: **missing**"
           else
             echo "- SBOM: not requested"
           fi

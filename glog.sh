@@ -1,6 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+# Logging is DEV-ONLY. Customer-facing runs must not print scanner/tool names or
+# tool output; pass --dev (private *-dev images) to get verbose output.
+DEV=false
+glog_log() {
+  [[ "$DEV" == true ]] && echo "$@"
+  return 0
+}
+
 DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "objectscript" "go") #"docker"
 
 declare -A IMAGE_MAP=(
@@ -48,6 +56,7 @@ Options:
   --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
   --privacy-tier TIER       full (default) | metrics | none. Controls what leaves the tenant.
   --api-url URL             Override Glog.AI server URL (default: from image config)
+  --dev                     Use the internal *-dev images and enable verbose logging
 
 EOF
 }
@@ -69,13 +78,13 @@ persist_scoped_scan_artifacts() {
   fi
 
   if [[ ! -d "$scan_path/.glog" ]]; then
-    echo "No .glog artifacts found in scoped scan directory."
+    glog_log "No .glog artifacts found in scoped scan directory."
     return
   fi
 
   mkdir -p "$project_path/.glog"
   cp -a "$scan_path/.glog/." "$project_path/.glog/"
-  echo "Persisted scoped scan artifacts to $project_path/.glog"
+  glog_log "Persisted scoped scan artifacts to $project_path/.glog"
 }
 
 verify_scan_artifacts() {
@@ -83,40 +92,40 @@ verify_scan_artifacts() {
   local glog_dir="$project_path/.glog"
   local missing=0
 
-  echo "--- Glog artifact summary ($glog_dir) ---"
+  glog_log "--- Glog artifact summary ($glog_dir) ---"
   if [[ -d "$glog_dir" ]]; then
-    ls -l "$glog_dir" || true
+    [[ "$DEV" == true ]] && { ls -l "$glog_dir" || true; }
   else
-    echo "  (no .glog directory was produced)"
+    glog_log "  (no .glog directory was produced)"
   fi
 
   if [[ "$SBOM_ONLY" != "true" ]]; then
     if [[ -s "$glog_dir/glog-scan.sarif" ]]; then
-      echo "  SARIF: OK ($glog_dir/glog-scan.sarif)"
+      glog_log "  SARIF: OK ($glog_dir/glog-scan.sarif)"
     else
-      echo "  SARIF: MISSING — the resolver produced no glog-scan.sarif"
+      echo "Glog: SARIF results are missing." >&2
       missing=1
     fi
   fi
 
   if [[ "$WITH_SBOM" == "true" ]]; then
     if compgen -G "$glog_dir/*.cdx.json" > /dev/null; then
-      echo "  SBOM: OK ($(ls "$glog_dir"/*.cdx.json | tr '\n' ' '))"
+      glog_log "  SBOM: OK ($(ls "$glog_dir"/*.cdx.json | tr '\n' ' '))"
     else
-      echo "  SBOM: MISSING — SBOM generation produced no *.cdx.json, so nothing could be uploaded"
+      echo "Glog: SBOM results are missing." >&2
       missing=1
     fi
   fi
 
   if [[ "$RESOLVER_UPLOAD" == "true" ]]; then
-    echo "  Upload: requested (server ingestion is reported by the resolver above)"
+    glog_log "  Upload: requested (server ingestion is reported by the resolver above)"
   else
-    echo "  Upload: disabled (pass on-prem-upload=true / --upload to send results to the server)"
+    glog_log "  Upload: disabled (pass on-prem-upload=true / --upload to send results to the server)"
   fi
-  echo "----------------------------------------"
+  glog_log "----------------------------------------"
 
   if [[ "$missing" -ne 0 ]]; then
-    echo "Glog: expected scan artifacts are missing — failing the step so this is not silently ignored." >&2
+    echo "Glog: expected scan artifacts are missing — failing the step." >&2
     return 1
   fi
   return 0
@@ -171,7 +180,7 @@ prepare_scoped_files_dir() {
 
     case "$trimmed_file" in
       /*|../*|*/../*|*"/.."|*"../"*)
-        echo "Invalid file path: $trimmed_file"
+        echo "Invalid file path: $trimmed_file" >&2
         exit 1
         ;;
     esac
@@ -179,7 +188,7 @@ prepare_scoped_files_dir() {
     src="$project_dir/$trimmed_file"
 
     if [[ ! -f "$src" ]]; then
-      echo "File not found: $trimmed_file"
+      echo "File not found: $trimmed_file" >&2
       exit 1
     fi
 
@@ -206,14 +215,14 @@ scan_lang() {
 
   local image_list="${IMAGE_MAP[$lang]:-}"
   if [[ -z "$image_list" ]]; then
-    echo "  (skipping '$lang': no scanner image mapped — use --sbom / --inventory flags, not --lang)"
+    glog_log "  (skipping '$lang': no scanner image mapped — use --sbom / --inventory flags, not --lang)"
     return 0
   fi
 
   for image_name in $image_list; do
     if [[ -n "${GLOG_DEPSCAN_VDB_VOLUME:-}" ]]; then
       if ! docker volume inspect "${GLOG_DEPSCAN_VDB_VOLUME}" > /dev/null 2>&1; then
-        echo "Creating Docker volume: ${GLOG_DEPSCAN_VDB_VOLUME}"
+        glog_log "Creating Docker volume: ${GLOG_DEPSCAN_VDB_VOLUME}"
         docker volume create "${GLOG_DEPSCAN_VDB_VOLUME}"
       fi
     fi
@@ -229,9 +238,24 @@ scan_lang() {
       EXTRA_ARGS+=(-e FETCH_LICENSE=false)
     fi
 
-    echo "--> Running scanner: ${registry}${image_name}"
-    docker run --pull always --rm \
+    glog_log "--> Running scanner: ${registry}${image_name}"
+    local run_image="${registry}${image_name}"
+    if [[ "$DEV" == true ]]; then
+      run_image="${registry}${image_name}-dev"
+    fi
+
+    # Pull quietly in non-dev runs so image pull chatter stays out of CI logs.
+    local pull_args=(--pull always)
+    if [[ "$DEV" != true ]]; then
+      pull_args=()
+      docker pull -q "$run_image" > /dev/null 2>&1 || true
+    fi
+
+    docker run "${pull_args[@]}" --rm \
+
       "${EXTRA_ARGS[@]}" \
+      -e GLOG_DEV="$DEV" \
+      -e LOG_LEVEL="$([[ "$DEV" == true ]] && echo DEBUG || echo CRITICAL)" \
       -e GLOGSERVICE="${GLOG_TOKEN}" \
       -e GLOG_TOKEN="${GLOG_TOKEN}" \
       -e HOST_UID="$(id -u)" \
@@ -264,7 +288,8 @@ scan_lang() {
       ${VDB_AGE_HOURS:+-e VDB_AGE_HOURS="${VDB_AGE_HOURS}"} \
       -v "$path":/app \
       ${GLOG_DEPSCAN_VDB_VOLUME:+-v "${GLOG_DEPSCAN_VDB_VOLUME}:${VDB_HOME:-/vdb}"} \
-      "${registry}${image_name}"
+      "$run_image"
+
   done
 }
 
@@ -320,6 +345,7 @@ while [[ $# -gt 0 ]]; do
     --scl-uuid) SCL_UUID="$2"; shift 2 ;;
     --privacy-tier) PRIVACY_TIER="$2"; shift 2 ;;
     --api-url) GLOG_API_URL="$2"; shift 2 ;;
+    --dev) DEV=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -332,9 +358,9 @@ esac
 
 export WITH_SBOM SBOM_ONLY SCL_UUID FORCE_INVENTORY PRIVACY_TIER GLOG_API_URL
 
-echo "Glog scan options: WITH_SBOM=$WITH_SBOM SBOM_ONLY=$SBOM_ONLY FORCE_INVENTORY=$FORCE_INVENTORY RESOLVER_UPLOAD=$RESOLVER_UPLOAD SCL_UUID=${SCL_UUID:-<auto>}"
+glog_log "Glog scan options: WITH_SBOM=$WITH_SBOM SBOM_ONLY=$SBOM_ONLY FORCE_INVENTORY=$FORCE_INVENTORY RESOLVER_UPLOAD=$RESOLVER_UPLOAD SCL_UUID=${SCL_UUID:-<auto>}"
 if [[ "$WITH_SBOM" == "true" && "$RESOLVER_UPLOAD" != "true" ]]; then
-  echo "Note: SBOM will be written locally to .glog/ only. To send it to the Glog server pass on-prem-upload=true."
+  glog_log "Note: SBOM will be written locally to .glog/ only. To send it to the Glog server pass on-prem-upload=true."
 fi
 
 if [[ ${#COMMANDS[@]} -eq 0 ]]; then
@@ -344,7 +370,7 @@ fi
 for cmd in "${COMMANDS[@]}"; do
   case "$cmd" in
     clean)
-      echo "Cleaning .glog directory in $PROJECT_PATH..."
+      glog_log "Cleaning .glog directory in $PROJECT_PATH..."
       if [ -d "$PROJECT_PATH/.glog" ]; then
         rm -rf "$PROJECT_PATH"/.glog/*
       fi
@@ -353,9 +379,9 @@ for cmd in "${COMMANDS[@]}"; do
       SCAN_PATH="$PROJECT_PATH"
 
       if [[ ${#FILES[@]} -gt 0 ]]; then
-        echo "Preparing scoped scan for selected files..."
+        glog_log "Preparing scoped scan for selected files..."
         SCAN_PATH="$(prepare_scoped_files_dir "$PROJECT_PATH" "${FILES[@]}")"
-        echo "Scoped scan directory: $SCAN_PATH"
+        glog_log "Scoped scan directory: $SCAN_PATH"
       fi
 
       if [[ ${#LANGUAGES[@]} -eq 0 ]]; then
@@ -377,17 +403,17 @@ for cmd in "${COMMANDS[@]}"; do
       #   2. platform format, no upload  -> what stays in .glog/ and gets committed
       for lang in "${LANGUAGES[@]}"; do
         [[ "$lang" == "resolver" ]] && continue
-        echo "Analyzing language: $lang"
+        glog_log "Analyzing language: $lang"
         scan_lang "$lang" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "false" "$PRIVACY_TIER" "$GLOG_API_URL"
       done
 
       if [[ -n "$SERVER_SARIF_FORMAT_TYPE" && "$SERVER_SARIF_FORMAT_TYPE" != "$SARIF_FORMAT_TYPE" && "$RESOLVER_UPLOAD" == "true" ]]; then
-        echo "Resolver pass 1/2: format=$SERVER_SARIF_FORMAT_TYPE (server upload)"
+        glog_log "Resolver pass 1/2: format=$SERVER_SARIF_FORMAT_TYPE (server upload)"
         scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SERVER_SARIF_FORMAT_TYPE" "true" "$PRIVACY_TIER" "$GLOG_API_URL"
-        echo "Resolver pass 2/2: format=$SARIF_FORMAT_TYPE (local/platform artifact)"
+        glog_log "Resolver pass 2/2: format=$SARIF_FORMAT_TYPE (local/platform artifact)"
         scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "false" "$PRIVACY_TIER" "$GLOG_API_URL"
       else
-        echo "Resolver pass: format=$SARIF_FORMAT_TYPE upload=$RESOLVER_UPLOAD"
+        glog_log "Resolver pass: format=$SARIF_FORMAT_TYPE upload=$RESOLVER_UPLOAD"
         scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "$RESOLVER_UPLOAD" "$PRIVACY_TIER" "$GLOG_API_URL"
       fi
 
