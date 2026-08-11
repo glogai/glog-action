@@ -254,9 +254,12 @@ runs:
         if [ "${{ inputs.on-prem-upload }}" = "true" ]; then
           ARGS+=("--upload")
         fi
-        if [ "${{ inputs.inventory }}" = "true" ]; then
+        # Uploading to the dashboard requires an inventory binding, otherwise the
+        # resolver resolves no component and silently skips the inventory upload.
+        if [ "${{ inputs.inventory }}" = "true" ] || [ "${{ inputs.on-prem-upload }}" = "true" ]; then
           ARGS+=("--inventory")
         fi
+
         if [ "${{ inputs.sbom }}" = "true" ] || [ "${{ inputs.sbom-only }}" = "true" ]; then
           ARGS+=("--sbom")
         fi
