@@ -290,6 +290,29 @@ runs:
         GLOG_COMPONENT: ${{ github.event.repository.name }}
         GLOG_BRANCH: ${{ github.head_ref != '' && github.head_ref || github.ref_name }}
 
+    - name: Glog artifact summary
+      if: always()
+      run: |
+        GLOG_DIR="$GITHUB_WORKSPACE/${{ inputs.path }}/.glog"
+        {
+          echo "### Glog scan artifacts"
+          echo ""
+          if [ -f "$GLOG_DIR/glog-scan.sarif" ]; then
+            echo "- SARIF: \`glog-scan.sarif\` present"
+          else
+            echo "- SARIF: **missing**"
+          fi
+          if ls "$GLOG_DIR"/*.cdx.json >/dev/null 2>&1; then
+            echo "- SBOM: \`$(basename $(ls "$GLOG_DIR"/*.cdx.json | head -n1))\` present"
+          elif [ "${{ inputs.sbom }}" = "true" ] || [ "${{ inputs.sbom-only }}" = "true" ]; then
+            echo "- SBOM: **missing** (SBOM generation produced no output — see the Glog Scan log for TOOL_FAILED / SBOM generation failed)"
+          else
+            echo "- SBOM: not requested"
+          fi
+          echo "- Server upload: ${{ inputs.on-prem-upload }}"
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
+
     - name: Git Add report
       run: |
         git config --global user.name ${{ github.actor }} 

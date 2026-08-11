@@ -78,6 +78,50 @@ persist_scoped_scan_artifacts() {
   echo "Persisted scoped scan artifacts to $project_path/.glog"
 }
 
+verify_scan_artifacts() {
+  local project_path="$1"
+  local glog_dir="$project_path/.glog"
+  local missing=0
+
+  echo "--- Glog artifact summary ($glog_dir) ---"
+  if [[ -d "$glog_dir" ]]; then
+    ls -l "$glog_dir" || true
+  else
+    echo "  (no .glog directory was produced)"
+  fi
+
+  if [[ "$SBOM_ONLY" != "true" ]]; then
+    if [[ -s "$glog_dir/glog-scan.sarif" ]]; then
+      echo "  SARIF: OK ($glog_dir/glog-scan.sarif)"
+    else
+      echo "  SARIF: MISSING — the resolver produced no glog-scan.sarif"
+      missing=1
+    fi
+  fi
+
+  if [[ "$WITH_SBOM" == "true" ]]; then
+    if compgen -G "$glog_dir/*.cdx.json" > /dev/null; then
+      echo "  SBOM: OK ($(ls "$glog_dir"/*.cdx.json | tr '\n' ' '))"
+    else
+      echo "  SBOM: MISSING — SBOM generation produced no *.cdx.json, so nothing could be uploaded"
+      missing=1
+    fi
+  fi
+
+  if [[ "$RESOLVER_UPLOAD" == "true" ]]; then
+    echo "  Upload: requested (server ingestion is reported by the resolver above)"
+  else
+    echo "  Upload: disabled (pass on-prem-upload=true / --upload to send results to the server)"
+  fi
+  echo "----------------------------------------"
+
+  if [[ "$missing" -ne 0 ]]; then
+    echo "Glog: expected scan artifacts are missing — failing the step so this is not silently ignored." >&2
+    return 1
+  fi
+  return 0
+}
+
 detect_languages() {
   local project_dir="$1"
   local -A languages=()
@@ -345,6 +389,7 @@ for cmd in "${COMMANDS[@]}"; do
 
 
       persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
+      verify_scan_artifacts "$PROJECT_PATH"
       ;;
   esac
 done
