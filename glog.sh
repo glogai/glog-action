@@ -1,13 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-# Logging is DEV-ONLY. Customer-facing runs must not print scanner/tool names or
-# tool output; pass --dev (private *-dev images) to get verbose output.
-DEV=false
+# Progress logging is fine; scanner/tool/image names must never be printed.
+# Verbose tool output comes from the internal *-dev images themselves.
 glog_log() {
-  [[ "$DEV" == true ]] && echo "$@"
-  return 0
+  echo "$@"
 }
+
 
 DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "objectscript" "go") #"docker"
 
@@ -56,7 +55,6 @@ Options:
   --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
   --privacy-tier TIER       full (default) | metrics | none. Controls what leaves the tenant.
   --api-url URL             Override Glog.AI server URL (default: from image config)
-  --dev                     Use the internal *-dev images and enable verbose logging
 
 EOF
 }
@@ -94,7 +92,7 @@ verify_scan_artifacts() {
 
   glog_log "--- Glog artifact summary ($glog_dir) ---"
   if [[ -d "$glog_dir" ]]; then
-    [[ "$DEV" == true ]] && { ls -l "$glog_dir" || true; }
+    ls -l "$glog_dir" || true
   else
     glog_log "  (no .glog directory was produced)"
   fi
@@ -238,23 +236,10 @@ scan_lang() {
       EXTRA_ARGS+=(-e FETCH_LICENSE=false)
     fi
 
-    glog_log "--> Running scanner: ${registry}${image_name}"
     local run_image="${registry}${image_name}"
-    if [[ "$DEV" == true ]]; then
-      run_image="${registry}${image_name}-dev"
-    fi
 
-    # Pull quietly in non-dev runs so image pull chatter stays out of CI logs.
-    local pull_args=(--pull always)
-    if [[ "$DEV" != true ]]; then
-      pull_args=()
-      docker pull -q "$run_image" > /dev/null 2>&1 || true
-    fi
-
-    docker run "${pull_args[@]}" --rm \
+    docker run --pull always --rm \
       "${EXTRA_ARGS[@]}" \
-      -e GLOG_DEV="$DEV" \
-      -e LOG_LEVEL="$([[ "$DEV" == true ]] && echo DEBUG || echo CRITICAL)" \
       -e GLOGSERVICE="${GLOG_TOKEN}" \
       -e GLOG_TOKEN="${GLOG_TOKEN}" \
       -e HOST_UID="$(id -u)" \
@@ -344,7 +329,6 @@ while [[ $# -gt 0 ]]; do
     --scl-uuid) SCL_UUID="$2"; shift 2 ;;
     --privacy-tier) PRIVACY_TIER="$2"; shift 2 ;;
     --api-url) GLOG_API_URL="$2"; shift 2 ;;
-    --dev) DEV=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
