@@ -259,7 +259,6 @@ runs:
         if [ "${{ inputs.inventory }}" = "true" ] || [ "${{ inputs.on-prem-upload }}" = "true" ]; then
           ARGS+=("--inventory")
         fi
-
         if [ "${{ inputs.sbom }}" = "true" ] || [ "${{ inputs.sbom-only }}" = "true" ]; then
           ARGS+=("--sbom")
         fi
