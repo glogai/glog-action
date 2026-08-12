@@ -345,7 +345,32 @@ runs:
       run: |
           DATE=$(date +"%Y-%m-%d %H:%M:%S")
           git commit -am "[$DATE] Glog.AI assessment"
-          git push
+
+          BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          if [ -z "$BRANCH" ] || [ "$(git rev-parse --abbrev-ref HEAD)" = "HEAD" ]; then
+            echo "Detached HEAD or unknown branch; skipping push of SARIF commit."
+            exit 0
+          fi
+
+          # The remote branch can move while the scan runs (other jobs, other
+          # pushes). Rebase onto the latest remote state and retry instead of
+          # failing the whole scan on a non-fast-forward rejection.
+          for attempt in 1 2 3 4 5; do
+            if git push origin "HEAD:refs/heads/$BRANCH"; then
+              echo "Pushed SARIF commit (attempt $attempt)."
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); syncing with remote and retrying..."
+            git fetch origin "$BRANCH" || true
+            if ! git rebase "origin/$BRANCH"; then
+              git rebase --abort || true
+              echo "Rebase conflict on $BRANCH; skipping SARIF push for this run."
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "Could not push SARIF commit after several attempts; continuing without failing the scan."
+          exit 0
       shell: bash
 
     - name: Upload report
