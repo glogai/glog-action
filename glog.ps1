@@ -303,7 +303,12 @@ function Invoke-ScanLang {
                 '-e', "GLOG_IMAGE=$imageName",
                 '-e', "HOST_PROJECT_PATH=$resolvedScanPath",
                 '-e', ("GLOG_COMPONENT=" + $(if ($env:GLOG_COMPONENT) { $env:GLOG_COMPONENT } else { Split-Path -Leaf $resolvedScanPath })),
-                '-e', ("GLOG_BRANCH=" + $(foreach ($v in @($env:GLOG_BRANCH, $env:GITHUB_HEAD_REF, $env:GITHUB_REF_NAME, $env:BUILD_SOURCEBRANCHNAME, $env:CI_COMMIT_REF_NAME, $env:BRANCH_NAME)) { if ($v) { $v; break } }))
+                '-e', ("GLOG_BRANCH=" + $(foreach ($v in @($env:GLOG_BRANCH, $env:GITHUB_HEAD_REF, $env:GITHUB_REF_NAME, $env:BUILD_SOURCEBRANCHNAME, $env:CI_COMMIT_REF_NAME, $env:BRANCH_NAME)) { if ($v) { $v; break } })),
+                '-e', ("GLOG_PROFILE=" + $(if ($env:GLOG_PROFILE) { $env:GLOG_PROFILE } else { '' })),
+                '-e', ("GLOG_REMEDIATION_BULK=" + $(if ($env:GLOG_REMEDIATION_BULK) { $env:GLOG_REMEDIATION_BULK } else { '1' })),
+                '-e', ("GLOG_REMEDIATION_BATCH=" + $(if ($env:GLOG_REMEDIATION_BATCH) { $env:GLOG_REMEDIATION_BATCH } else { '20' })),
+                '-e', ("GLOG_REMEDIATION_BATCH_LINGER_MS=" + $(if ($env:GLOG_REMEDIATION_BATCH_LINGER_MS) { $env:GLOG_REMEDIATION_BATCH_LINGER_MS } else { '250' })),
+                '-e', ("GLOG_REMEDIATION_INFLIGHT_BATCHES=" + $(if ($env:GLOG_REMEDIATION_INFLIGHT_BATCHES) { $env:GLOG_REMEDIATION_INFLIGHT_BATCHES } else { '8' }))
             )
 
             if ($ApiUrl) {

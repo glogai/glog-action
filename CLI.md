@@ -270,6 +270,26 @@ Example:
 
 ---
 
+## Bulk remediation env vars
+
+These are read from the environment (no CLI flags) and forwarded into the scanner
+containers by both `glog.sh` and `glog.ps1`. The GitHub Action forwards them too,
+so setting them at workflow/job level is enough.
+
+| Env | Default | Purpose |
+|---|---|---|
+| `GLOG_REMEDIATION_BULK` | `1` | Set `0` to disable batching (one POST per finding) |
+| `GLOG_REMEDIATION_BATCH` | `20` | Findings per remediation POST |
+| `GLOG_REMEDIATION_BATCH_LINGER_MS` | `250` | Max wait before flushing a partial batch |
+| `GLOG_REMEDIATION_INFLIGHT_BATCHES` | `8` | Max concurrent batches |
+| `GLOG_PROFILE` | unset | `1` enables resolver timing profiling |
+
+If a batch fails or the server answers with an unexpected item count, the resolver
+falls back to single-item calls automatically.
+
+---
+
+
 
 
 ## Full examples

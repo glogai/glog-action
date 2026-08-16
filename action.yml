@@ -287,6 +287,13 @@ runs:
         GLOG_TOKEN: ${{ inputs.glog-token }}
         GLOG_COMPONENT: ${{ github.event.repository.name }}
         GLOG_BRANCH: ${{ github.head_ref != '' && github.head_ref || github.ref_name }}
+        # Bulk remediation / profiling knobs. Empty values fall back to the
+        # defaults inside glog.sh (bulk on, batch 20, linger 250ms, 8 in flight).
+        GLOG_PROFILE: ${{ env.GLOG_PROFILE }}
+        GLOG_REMEDIATION_BULK: ${{ env.GLOG_REMEDIATION_BULK }}
+        GLOG_REMEDIATION_BATCH: ${{ env.GLOG_REMEDIATION_BATCH }}
+        GLOG_REMEDIATION_BATCH_LINGER_MS: ${{ env.GLOG_REMEDIATION_BATCH_LINGER_MS }}
+        GLOG_REMEDIATION_INFLIGHT_BATCHES: ${{ env.GLOG_REMEDIATION_INFLIGHT_BATCHES }}
 
     - name: Glog artifact summary
       if: always()
@@ -372,6 +379,7 @@ runs:
           echo "Could not push SARIF commit after several attempts; continuing without failing the scan."
           exit 0
       shell: bash
+
 
     - name: Upload report
       if: ${{ inputs.upload == 'true' }}
