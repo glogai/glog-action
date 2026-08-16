@@ -288,7 +288,7 @@ runs:
         GLOG_COMPONENT: ${{ github.event.repository.name }}
         GLOG_BRANCH: ${{ github.head_ref != '' && github.head_ref || github.ref_name }}
         # Bulk remediation / profiling knobs. Empty values fall back to the
-        # defaults inside glog.sh (bulk on, batch 20, linger 250ms, 8 in flight).
+        # defaults inside glog.sh (bulk on, batch 20, linger 750ms, 8 in flight).
         GLOG_PROFILE: ${{ env.GLOG_PROFILE }}
         GLOG_REMEDIATION_BULK: ${{ env.GLOG_REMEDIATION_BULK }}
         GLOG_REMEDIATION_BATCH: ${{ env.GLOG_REMEDIATION_BATCH }}

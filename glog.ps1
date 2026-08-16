@@ -307,7 +307,7 @@ function Invoke-ScanLang {
                 '-e', ("GLOG_PROFILE=" + $(if ($env:GLOG_PROFILE) { $env:GLOG_PROFILE } else { '' })),
                 '-e', ("GLOG_REMEDIATION_BULK=" + $(if ($env:GLOG_REMEDIATION_BULK) { $env:GLOG_REMEDIATION_BULK } else { '1' })),
                 '-e', ("GLOG_REMEDIATION_BATCH=" + $(if ($env:GLOG_REMEDIATION_BATCH) { $env:GLOG_REMEDIATION_BATCH } else { '20' })),
-                '-e', ("GLOG_REMEDIATION_BATCH_LINGER_MS=" + $(if ($env:GLOG_REMEDIATION_BATCH_LINGER_MS) { $env:GLOG_REMEDIATION_BATCH_LINGER_MS } else { '250' })),
+                '-e', ("GLOG_REMEDIATION_BATCH_LINGER_MS=" + $(if ($env:GLOG_REMEDIATION_BATCH_LINGER_MS) { $env:GLOG_REMEDIATION_BATCH_LINGER_MS } else { '750' })),
                 '-e', ("GLOG_REMEDIATION_INFLIGHT_BATCHES=" + $(if ($env:GLOG_REMEDIATION_INFLIGHT_BATCHES) { $env:GLOG_REMEDIATION_INFLIGHT_BATCHES } else { '8' }))
             )
 

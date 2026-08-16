@@ -280,7 +280,7 @@ so setting them at workflow/job level is enough.
 |---|---|---|
 | `GLOG_REMEDIATION_BULK` | `1` | Set `0` to disable batching (one POST per finding) |
 | `GLOG_REMEDIATION_BATCH` | `20` | Findings per remediation POST |
-| `GLOG_REMEDIATION_BATCH_LINGER_MS` | `250` | Max wait before flushing a partial batch |
+| `GLOG_REMEDIATION_BATCH_LINGER_MS` | `750` | Max wait before flushing a partial batch |
 | `GLOG_REMEDIATION_INFLIGHT_BATCHES` | `8` | Max concurrent batches |
 | `GLOG_PROFILE` | unset | `1` enables resolver timing profiling |
 
