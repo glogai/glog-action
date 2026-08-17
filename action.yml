@@ -294,6 +294,10 @@ runs:
         GLOG_REMEDIATION_BATCH: ${{ env.GLOG_REMEDIATION_BATCH }}
         GLOG_REMEDIATION_BATCH_LINGER_MS: ${{ env.GLOG_REMEDIATION_BATCH_LINGER_MS }}
         GLOG_REMEDIATION_INFLIGHT_BATCHES: ${{ env.GLOG_REMEDIATION_INFLIGHT_BATCHES }}
+        # Read the false-positive verdict from the remediation response instead
+        # of a second AI call per finding. Set to "false" to restore the probe.
+        GLOG_FP_FROM_VALIDATE: ${{ env.GLOG_FP_FROM_VALIDATE }}
+
 
     - name: Glog artifact summary
       if: always()
