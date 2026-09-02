@@ -270,6 +270,54 @@ Example:
 
 ---
 
+## Supply-chain options
+
+| Flag | Purpose |
+|---|---|
+| `--supply-chain` | Run the bounded supply-chain scan over manifests, SBOMs and safe archive content |
+| `--supply-chain-policy FILE` | Policy file relative to `--path`; enables policy gating |
+| `--supply-chain-offline` | No registry network access; only the persistent cache is used |
+| `--supply-chain-cache-only` | Use only cached registry metadata (implies offline) |
+| `--supply-chain-fail-on LEVEL` | Severity threshold: `INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
+| `--supply-chain-format FORMAT` | Output: `json`, `sarif` or `both` (default `both`) |
+
+## Reproducible-build (rebuild) options
+
+The rebuild worker runs on the runner/client machine, next to the code being
+scanned. Only the resulting path-to-SHA256 manifest is uploaded; package bytes
+never leave the runner and the server needs no Docker socket.
+
+| Flag | Purpose |
+|---|---|
+| `--rebuild` | Run the reproducible-build worker on this runner |
+| `--rebuild-artifact PATH` | Package artifact present on this runner (required) |
+| `--rebuild-package NAME` | Package name (required) |
+| `--rebuild-version VERSION` | Package version (required) |
+| `--rebuild-ecosystem NAME` | `npm`, `pypi`, `go`, `cargo`, `maven` or `rubygems` (required) |
+| `--rebuild-manifest PATH` | Optional published path-to-SHA256 manifest |
+| `--rebuild-image IMAGE` | Rebuild worker image (default `ghcr.io/glogai/glog-scan-rebuild-4673`) |
+
+`--rebuild-manifest` is optional. When omitted, the Glog server resolves the
+published artifact from its allow-listed registry hosts, hashes it in a worker
+and caches the shared baseline. In that case the rebuild job is first accepted as
+`pending` (HTTP `202`) and is compared automatically once the baseline is ready.
+
+Example:
+
+```bash
+./glog.sh scan \
+  --path /repo --lang java --client acme --glogtoken "$GLOG_TOKEN" \
+  --supply-chain --supply-chain-fail-on HIGH \
+  --rebuild \
+  --rebuild-artifact /repo/dist/example-1.2.3.tgz \
+  --rebuild-package example-package \
+  --rebuild-version 1.2.3 \
+  --rebuild-ecosystem npm
+```
+
+---
+
+
 ## Bulk remediation env vars
 
 These are read from the environment (no CLI flags) and forwarded into the scanner

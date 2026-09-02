@@ -184,6 +184,46 @@ If you see `Unable to upload "./.glog/glog-scan.sarif" as it is not valid SARIF`
 | `autofix` | No | `false` | Assigns newly created issues to `copilot-swe-agent[bot]`. This is only meaningful when `issue: true`. |
 | `max-issues` | No | `30` | Maximum number of SARIF findings converted into issues in one run. |
 | `max-assign` | No | `30` | Maximum number of newly created issues assigned to Copilot in one run. |
+| `supply-chain` | No | `false` | Runs the bounded supply-chain scan over manifests, SBOMs and safe archive content. |
+| `supply-chain-policy` | No | - | Policy file relative to `path`; enables policy gating. |
+| `supply-chain-offline` | No | `false` | No registry network access; only the persistent cache is used. |
+| `supply-chain-cache-only` | No | `false` | Use only cached registry metadata (implies offline). |
+| `supply-chain-fail-on` | No | policy value | Severity threshold override: `INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`. |
+| `supply-chain-format` | No | `both` | Supply-chain output format: `json`, `sarif` or `both`. |
+| `rebuild` | No | `false` | Runs the reproducible-build worker on the runner and uploads only the resulting manifest. |
+| `rebuild-artifact` | With `rebuild` | - | Package artifact present on the runner. |
+| `rebuild-package` | With `rebuild` | - | Package name. |
+| `rebuild-version` | With `rebuild` | - | Package version. |
+| `rebuild-ecosystem` | With `rebuild` | - | `npm`, `pypi`, `go`, `cargo`, `maven` or `rubygems`. |
+| `rebuild-manifest` | No | - | Optional published path-to-SHA256 manifest. Omit it to use the server-side baseline cache. |
+| `rebuild-image` | No | `ghcr.io/glogai/glog-scan-rebuild-4673` | Rebuild worker image. |
+
+### Supply-chain & reproducible-build example
+
+```yaml
+- name: Run Glog.AI supply-chain scan
+  uses: ./.github/glog-action
+  with:
+    client: 'acme'
+    on-prem-upload: 'true'
+    supply-chain: 'true'
+    supply-chain-fail-on: 'HIGH'
+    rebuild: 'true'
+    rebuild-artifact: 'dist/example-1.2.3.tgz'
+    rebuild-package: 'example-package'
+    rebuild-version: '1.2.3'
+    rebuild-ecosystem: 'npm'
+    github-token: ${{ secrets.PAT_TOKEN }}
+    glog-token: ${{ secrets.GLOG_TOKEN }}
+```
+
+The rebuild worker runs on the runner, so package contents never leave CI — only
+the path-to-SHA256 manifest is submitted. When `rebuild-manifest` is omitted, the
+Glog server fetches and hashes the published artifact itself and caches the shared
+baseline; the job is accepted as `pending` and compared as soon as the baseline is
+ready. Details: [Supply-chain security architecture](../glog-server/docs/docs/architecture/supply-chain-security.md).
+
+
 
 ### Inventory & SBOM examples
 
