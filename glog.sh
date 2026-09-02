@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "objectscript" "go") #"docker"
+DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "reachability" "resolver" "objectscript" "go") #"docker"
 
 declare -A IMAGE_MAP=(
   [oss]="glog-scan-oss-cc90"
@@ -11,6 +11,7 @@ declare -A IMAGE_MAP=(
   [cpp]="glog-scan-cpp-c97a"
   [python]="glog-scan-python-5f95 glog-scan-python-0386 glog-scan-python-4166"
   [secrets]="glog-scan-secrets-f27b"
+  [reachability]="glog-scan-reachability-f820"
   [csharp]="glog-scan-csharp-b460 glog-scan-csharp-6c24"
   [php]="glog-scan-php-7d88 glog-scan-php-4719 glog-scan-php-ba41"
   [kotlin]="glog-scan-kotlin-d734"
