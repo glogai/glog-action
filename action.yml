@@ -74,6 +74,10 @@ inputs:
     description: "Privacy tier: 'full' (default, uploads SARIF + SBOM), 'metrics' (Iteration 4, currently treated as no-upload), 'none' (skip all uploads, same as anonymous)."
     required: false
     default: 'full'
+  mock-resolver:
+    description: "Run the scan against the server's offline OpenAI mock: no OpenAI cost, gibberish remediation text with production-like lengths, simulated latency and Tier 5 rate limits. For load/throughput testing only. Default is false."
+    required: false
+    default: 'false'
   api-url:
     description: "Override the Glog.AI server URL (e.g. https://test.dev.glog.ai). If unset, the resolver uses the URL baked into the image."
     required: false
@@ -86,6 +90,58 @@ inputs:
     description: "Optional second SARIF format used for the upload to the Glog server (normally STANDARD). Set it when the platform needs a different structure than the server; the resolver then runs twice and the platform format is the one committed."
     required: false
     default: ''
+  supply-chain:
+    description: "Run the bounded supply-chain scan for manifests, SBOMs and safe archive content."
+    required: false
+    default: 'false'
+  supply-chain-policy:
+    description: "Optional supply-chain policy file, relative to path. Enables policy gating."
+    required: false
+    default: ''
+  supply-chain-offline:
+    description: "Run supply-chain scanning without registry network access; only persistent cache data is used."
+    required: false
+    default: 'false'
+  supply-chain-cache-only:
+    description: "Use only the persistent supply-chain metadata cache. Implies offline mode."
+    required: false
+    default: 'false'
+  supply-chain-fail-on:
+    description: "Override the supply-chain policy severity threshold: INFO, LOW, MEDIUM, HIGH or CRITICAL."
+    required: false
+    default: ''
+  supply-chain-format:
+    description: "Supply-chain output format: json, sarif or both."
+    required: false
+    default: 'both'
+  rebuild:
+    description: "Run the reproducible-build worker on the CI runner and submit only its manifest."
+    required: false
+    default: 'false'
+  rebuild-artifact:
+    description: "Path to the package artifact on the CI runner."
+    required: false
+    default: ''
+  rebuild-manifest:
+    description: "Path to the published path-to-SHA256 manifest on the CI runner."
+    required: false
+    default: ''
+  rebuild-package:
+    description: "Package name used for the reproducible-build record."
+    required: false
+    default: ''
+  rebuild-version:
+    description: "Package version used for the reproducible-build record."
+    required: false
+    default: ''
+  rebuild-ecosystem:
+    description: "Package ecosystem: npm, pypi, go, cargo, maven or rubygems."
+    required: false
+    default: ''
+  rebuild-image:
+    description: "Optional fully-qualified rebuild worker image."
+    required: false
+    default: 'ghcr.io/glogai/glog-scan-rebuild-4673'
 
 runs:
   using: "composite"
@@ -271,6 +327,9 @@ runs:
         if [ -n "${{ inputs.privacy-tier }}" ]; then
           ARGS+=("--privacy-tier" "${{ inputs.privacy-tier }}")
         fi
+        if [ "${{ inputs.mock-resolver }}" = "true" ]; then
+          ARGS+=("--mock-resolver")
+        fi
         if [ -n "${{ inputs.api-url }}" ]; then
           ARGS+=("--api-url" "${{ inputs.api-url }}")
         fi
@@ -279,6 +338,35 @@ runs:
         fi
         if [ -n "${{ inputs.server-sarif-format-type }}" ]; then
           ARGS+=("--server-sarif-format-type" "${{ inputs.server-sarif-format-type }}")
+        fi
+        if [ "${{ inputs.supply-chain }}" = "true" ]; then
+          ARGS+=("--supply-chain")
+        fi
+        if [ -n "${{ inputs.supply-chain-policy }}" ]; then
+          ARGS+=("--supply-chain-policy" "${{ inputs.supply-chain-policy }}")
+        fi
+        if [ "${{ inputs.supply-chain-offline }}" = "true" ]; then
+          ARGS+=("--supply-chain-offline")
+        fi
+        if [ "${{ inputs.supply-chain-cache-only }}" = "true" ]; then
+          ARGS+=("--supply-chain-cache-only")
+        fi
+        if [ -n "${{ inputs.supply-chain-fail-on }}" ]; then
+          ARGS+=("--supply-chain-fail-on" "${{ inputs.supply-chain-fail-on }}")
+        fi
+        if [ -n "${{ inputs.supply-chain-format }}" ]; then
+          ARGS+=("--supply-chain-format" "${{ inputs.supply-chain-format }}")
+        fi
+        if [ "${{ inputs.rebuild }}" = "true" ]; then
+          ARGS+=("--rebuild"
+            "--rebuild-artifact" "${{ inputs.rebuild-artifact }}"
+            "--rebuild-package" "${{ inputs.rebuild-package }}"
+            "--rebuild-version" "${{ inputs.rebuild-version }}"
+            "--rebuild-ecosystem" "${{ inputs.rebuild-ecosystem }}"
+            "--rebuild-image" "${{ inputs.rebuild-image }}")
+          if [ -n "${{ inputs.rebuild-manifest }}" ]; then
+            ARGS+=("--rebuild-manifest" "${{ inputs.rebuild-manifest }}")
+          fi
         fi
 
         $TOOL_CMD "${ARGS[@]}"
@@ -297,6 +385,12 @@ runs:
         # Read the false-positive verdict from the remediation response instead
         # of a second AI call per finding. Set to "false" to restore the probe.
         GLOG_FP_FROM_VALIDATE: ${{ env.GLOG_FP_FROM_VALIDATE }}
+        SUPPLY_CHAIN_ENABLED: ${{ inputs.supply-chain }}
+        SUPPLY_CHAIN_POLICY: ${{ inputs.supply-chain-policy }}
+        SUPPLY_CHAIN_OFFLINE: ${{ inputs.supply-chain-offline }}
+        SUPPLY_CHAIN_CACHE_ONLY: ${{ inputs.supply-chain-cache-only }}
+        SUPPLY_CHAIN_FAIL_ON: ${{ inputs.supply-chain-fail-on }}
+        SUPPLY_CHAIN_FORMAT: ${{ inputs.supply-chain-format }}
 
 
     - name: Glog artifact summary

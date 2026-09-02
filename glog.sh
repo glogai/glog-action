@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+ACTION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "objectscript" "go") #"docker"
 
 declare -A IMAGE_MAP=(
@@ -47,7 +49,23 @@ Options:
   --sbom-only               Skip SARIF, only produce the SBOM (implies --sbom)
   --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
   --privacy-tier TIER       full (default) | metrics | none. Controls what leaves the tenant.
+  --mock-resolver           Serve AI answers from the server-side OpenAI mock (no OpenAI cost;
+                            simulated latency and Tier 5 rate limits). Testing only.
   --api-url URL             Override Glog.AI server URL (default: from image config)
+  --supply-chain             Run the bounded supply-chain scan
+  --supply-chain-policy FILE  Enable scanning with a policy file relative to --path
+  --supply-chain-offline      Disable registry network access; use only the persistent cache
+  --supply-chain-cache-only   Use only the persistent metadata cache
+  --supply-chain-fail-on LEVEL  Policy severity threshold: INFO, LOW, MEDIUM, HIGH or CRITICAL
+   --supply-chain-format FORMAT  Output: json, sarif or both (default: both)
+   --rebuild                    Run the reproducible-build worker on this runner
+   --rebuild-artifact PATH      Package artifact on this runner
+   --rebuild-manifest PATH      Optional published path-to-SHA256 manifest (server baseline otherwise)
+   --rebuild-package NAME       Package name
+   --rebuild-version VERSION    Package version
+   --rebuild-ecosystem NAME     npm, pypi, go, cargo, maven or rubygems
+   --rebuild-image IMAGE        Rebuild worker image
+
 
 EOF
 }
@@ -246,6 +264,13 @@ scan_lang() {
       -e WITH_INVENTORY="${FORCE_INVENTORY:-false}" \
       -e SCL_UUID="${SCL_UUID:-}" \
       -e PRIVACY_TIER="$privacy_tier" \
+       -e MOCK_RESOLVER="${MOCK_RESOLVER:-false}" \
+       -e SUPPLY_CHAIN_ENABLED="${SUPPLY_CHAIN_ENABLED:-false}" \
+       -e SUPPLY_CHAIN_POLICY="${SUPPLY_CHAIN_POLICY:-}" \
+       -e SUPPLY_CHAIN_OFFLINE="${SUPPLY_CHAIN_OFFLINE:-false}" \
+       -e SUPPLY_CHAIN_CACHE_ONLY="${SUPPLY_CHAIN_CACHE_ONLY:-false}" \
+       -e SUPPLY_CHAIN_FAIL_ON="${SUPPLY_CHAIN_FAIL_ON:-}" \
+       -e SUPPLY_CHAIN_FORMAT="${SUPPLY_CHAIN_FORMAT:-both}" \
       ${api_url:+-e GLOG_API_URL="$api_url"} \
       -e IGNORE="$ignore" \
       -e CLIENT="$client" \
@@ -296,7 +321,22 @@ SBOM_ONLY=false
 SCL_UUID=""
 FORCE_INVENTORY=false
 PRIVACY_TIER="${PRIVACY_TIER:-full}"
+MOCK_RESOLVER="${MOCK_RESOLVER:-false}"
 GLOG_API_URL="${GLOG_API_URL:-}"
+SUPPLY_CHAIN_ENABLED="${SUPPLY_CHAIN_ENABLED:-false}"
+SUPPLY_CHAIN_POLICY="${SUPPLY_CHAIN_POLICY:-}"
+SUPPLY_CHAIN_OFFLINE="${SUPPLY_CHAIN_OFFLINE:-false}"
+SUPPLY_CHAIN_CACHE_ONLY="${SUPPLY_CHAIN_CACHE_ONLY:-false}"
+SUPPLY_CHAIN_FAIL_ON="${SUPPLY_CHAIN_FAIL_ON:-}"
+SUPPLY_CHAIN_FORMAT="${SUPPLY_CHAIN_FORMAT:-both}"
+REBUILD=false
+REBUILD_ARTIFACT="${REBUILD_ARTIFACT:-}"
+REBUILD_MANIFEST="${REBUILD_MANIFEST:-}"
+REBUILD_PACKAGE="${REBUILD_PACKAGE:-}"
+REBUILD_VERSION="${REBUILD_VERSION:-}"
+REBUILD_ECOSYSTEM="${REBUILD_ECOSYSTEM:-}"
+REBUILD_IMAGE="${REBUILD_IMAGE:-ghcr.io/glogai/glog-scan-rebuild-4673}"
+
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -327,8 +367,22 @@ while [[ $# -gt 0 ]]; do
     --sbom-only) SBOM_ONLY=true; WITH_SBOM=true; shift ;;
     --scl-uuid) SCL_UUID="$2"; shift 2 ;;
     --privacy-tier) PRIVACY_TIER="$2"; shift 2 ;;
+    --mock-resolver) MOCK_RESOLVER=true; shift ;;
     --api-url) GLOG_API_URL="$2"; shift 2 ;;
-    -h|--help) usage; exit 0 ;;
+    --supply-chain) SUPPLY_CHAIN_ENABLED=true; shift ;;
+    --supply-chain-policy) SUPPLY_CHAIN_POLICY="$2"; SUPPLY_CHAIN_ENABLED=true; shift 2 ;;
+    --supply-chain-offline) SUPPLY_CHAIN_OFFLINE=true; SUPPLY_CHAIN_ENABLED=true; shift ;;
+    --supply-chain-cache-only) SUPPLY_CHAIN_CACHE_ONLY=true; SUPPLY_CHAIN_ENABLED=true; shift ;;
+    --supply-chain-fail-on) SUPPLY_CHAIN_FAIL_ON="$2"; SUPPLY_CHAIN_ENABLED=true; shift 2 ;;
+     --supply-chain-format) SUPPLY_CHAIN_FORMAT="$2"; SUPPLY_CHAIN_ENABLED=true; shift 2 ;;
+     --rebuild) REBUILD=true; shift ;;
+     --rebuild-artifact) REBUILD_ARTIFACT="$2"; shift 2 ;;
+     --rebuild-manifest) REBUILD_MANIFEST="$2"; shift 2 ;;
+     --rebuild-package) REBUILD_PACKAGE="$2"; shift 2 ;;
+     --rebuild-version) REBUILD_VERSION="$2"; shift 2 ;;
+     --rebuild-ecosystem) REBUILD_ECOSYSTEM="$2"; shift 2 ;;
+     --rebuild-image) REBUILD_IMAGE="$2"; shift 2 ;;
+     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
 done
@@ -338,7 +392,11 @@ case "$PRIVACY_TIER" in
   *) echo "Invalid --privacy-tier: $PRIVACY_TIER (expected: full, metrics, none)"; exit 1 ;;
 esac
 
-export WITH_SBOM SBOM_ONLY SCL_UUID FORCE_INVENTORY PRIVACY_TIER GLOG_API_URL
+export WITH_SBOM SBOM_ONLY SCL_UUID FORCE_INVENTORY PRIVACY_TIER GLOG_API_URL MOCK_RESOLVER
+export SUPPLY_CHAIN_ENABLED SUPPLY_CHAIN_POLICY SUPPLY_CHAIN_OFFLINE SUPPLY_CHAIN_CACHE_ONLY SUPPLY_CHAIN_FAIL_ON SUPPLY_CHAIN_FORMAT
+if [[ "$MOCK_RESOLVER" == "true" ]]; then
+  echo "WARNING: --mock-resolver is ON - AI answers are generated by the offline mock (no OpenAI cost). Results are NOT real remediations."
+fi
 
 echo "Glog scan options: WITH_SBOM=$WITH_SBOM SBOM_ONLY=$SBOM_ONLY FORCE_INVENTORY=$FORCE_INVENTORY RESOLVER_UPLOAD=$RESOLVER_UPLOAD SCL_UUID=${SCL_UUID:-<auto>}"
 if [[ "$WITH_SBOM" == "true" && "$RESOLVER_UPLOAD" != "true" ]]; then
@@ -347,6 +405,11 @@ fi
 
 if [[ ${#COMMANDS[@]} -eq 0 ]]; then
   usage; exit 1
+fi
+
+if [[ -n "$SUPPLY_CHAIN_FAIL_ON" && ! "$SUPPLY_CHAIN_FAIL_ON" =~ ^(INFO|LOW|MEDIUM|HIGH|CRITICAL)$ ]]; then
+  echo "Invalid --supply-chain-fail-on: $SUPPLY_CHAIN_FAIL_ON (expected INFO, LOW, MEDIUM, HIGH or CRITICAL)" >&2
+  exit 1
 fi
 
 for cmd in "${COMMANDS[@]}"; do
@@ -402,8 +465,29 @@ for cmd in "${COMMANDS[@]}"; do
       fi
 
 
-      persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
-      verify_scan_artifacts "$PROJECT_PATH"
-      ;;
+       persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
+       verify_scan_artifacts "$PROJECT_PATH"
+
+       if [[ "$REBUILD" == "true" ]]; then
+          if [[ -z "$REBUILD_ARTIFACT" || -z "$REBUILD_PACKAGE" || -z "$REBUILD_VERSION" || -z "$REBUILD_ECOSYSTEM" ]]; then
+            echo "Rebuild requires --rebuild-artifact, --rebuild-package, --rebuild-version and --rebuild-ecosystem" >&2
+            exit 1
+          fi
+          if [[ -z "$GLOG_API_URL" || -z "$GLOG_TOKEN" ]]; then
+            echo "Rebuild submission requires GLOG_API_URL and GLOG_TOKEN" >&2
+            exit 1
+          fi
+          echo "Running reproducible-build worker on CI artifact"
+          rebuild_args=(
+            --api-url "$GLOG_API_URL" --token "$GLOG_TOKEN" --image "$REBUILD_IMAGE"
+            --artifact "$REBUILD_ARTIFACT"
+            --package-name "$REBUILD_PACKAGE" --package-version "$REBUILD_VERSION"
+            --ecosystem "$REBUILD_ECOSYSTEM"
+          )
+          [[ -n "$REBUILD_MANIFEST" ]] && rebuild_args+=(--published-manifest "$REBUILD_MANIFEST")
+         [[ -n "$SCL_UUID" ]] && rebuild_args+=(--source-code-location "$SCL_UUID")
+         python3 "$ACTION_DIR/rebuild_client.py" "${rebuild_args[@]}"
+       fi
+       ;;
   esac
 done

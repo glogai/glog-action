@@ -297,6 +297,8 @@ function Invoke-ScanLang {
                 '-e', "WITH_INVENTORY=$ForceInventory",
                 '-e', "SCL_UUID=$SclUuid",
                 '-e', "PRIVACY_TIER=$PrivacyTier",
+                '-e', "MOCK_RESOLVER=$(if ($env:MOCK_RESOLVER) { $env:MOCK_RESOLVER } else { 'false' })",
+
                 '-e', "IGNORE=$Ignore",
                 '-e', "CLIENT=$Client",
                 '-e', "ENV=$EnvironmentName",
@@ -498,6 +500,12 @@ while ($index -lt $scriptArgs.Count) {
             if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --privacy-tier' }
             $privacyTier = $scriptArgs[$index + 1]
             $index += 2
+            continue
+        }
+        '--mock-resolver' {
+            $env:MOCK_RESOLVER = 'true'
+            Write-Output 'WARNING: --mock-resolver is ON - AI answers come from the offline mock (no OpenAI cost). Results are NOT real remediations.'
+            $index += 1
             continue
         }
         '--api-url' {
