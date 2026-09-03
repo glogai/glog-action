@@ -58,12 +58,12 @@ Options:
   --supply-chain-cache-only   Use only the persistent metadata cache
   --supply-chain-fail-on LEVEL  Policy severity threshold: INFO, LOW, MEDIUM, HIGH or CRITICAL
    --supply-chain-format FORMAT  Output: json, sarif or both (default: both)
-   --rebuild                    Run the reproducible-build worker on this runner
-   --rebuild-artifact PATH      Package artifact on this runner
-   --rebuild-manifest PATH      Optional published path-to-SHA256 manifest (server baseline otherwise)
-   --rebuild-package NAME       Package name
-   --rebuild-version VERSION    Package version
-   --rebuild-ecosystem NAME     npm, pypi, go, cargo, maven or rubygems
+   --rebuild                    Discover all lockfile dependencies and run the worker for each
+   --rebuild-artifact PATH      Optional single package artifact
+   --rebuild-manifest PATH      Optional published manifest for single-artifact mode
+   --rebuild-package NAME       Package name for single-artifact mode
+   --rebuild-version VERSION    Package version for single-artifact mode
+   --rebuild-ecosystem NAME     npm, pypi, go, cargo, maven or rubygems (single-artifact mode)
    --rebuild-image IMAGE        Rebuild worker image
 
 
@@ -468,26 +468,31 @@ for cmd in "${COMMANDS[@]}"; do
        persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
        verify_scan_artifacts "$PROJECT_PATH"
 
-       if [[ "$REBUILD" == "true" ]]; then
-          if [[ -z "$REBUILD_ARTIFACT" || -z "$REBUILD_PACKAGE" || -z "$REBUILD_VERSION" || -z "$REBUILD_ECOSYSTEM" ]]; then
-            echo "Rebuild requires --rebuild-artifact, --rebuild-package, --rebuild-version and --rebuild-ecosystem" >&2
-            exit 1
-          fi
-          if [[ -z "$GLOG_API_URL" || -z "$GLOG_TOKEN" ]]; then
-            echo "Rebuild submission requires GLOG_API_URL and GLOG_TOKEN" >&2
-            exit 1
-          fi
-          echo "Running reproducible-build worker on CI artifact"
-          rebuild_args=(
-            --api-url "$GLOG_API_URL" --token "$GLOG_TOKEN" --image "$REBUILD_IMAGE"
-            --artifact "$REBUILD_ARTIFACT"
-            --package-name "$REBUILD_PACKAGE" --package-version "$REBUILD_VERSION"
-            --ecosystem "$REBUILD_ECOSYSTEM"
-          )
-          [[ -n "$REBUILD_MANIFEST" ]] && rebuild_args+=(--published-manifest "$REBUILD_MANIFEST")
-         [[ -n "$SCL_UUID" ]] && rebuild_args+=(--source-code-location "$SCL_UUID")
-         python3 "$ACTION_DIR/rebuild_client.py" "${rebuild_args[@]}"
-       fi
+        if [[ "$REBUILD" == "true" ]]; then
+           if [[ -z "$GLOG_API_URL" || -z "$GLOG_TOKEN" ]]; then
+             echo "Rebuild submission requires GLOG_API_URL and GLOG_TOKEN" >&2
+             exit 1
+           fi
+           echo "Running reproducible-build worker for all discovered dependencies"
+           rebuild_args=(
+             --api-url "$GLOG_API_URL" --token "$GLOG_TOKEN" --image "$REBUILD_IMAGE"
+             --project-path "$PROJECT_PATH"
+           )
+           [[ -n "$SCL_UUID" ]] && rebuild_args+=(--source-code-location "$SCL_UUID")
+           # By default this is all-dependency mode. The legacy flags opt into one artifact.
+           if [[ -n "$REBUILD_ARTIFACT" ]]; then
+             if [[ -z "$REBUILD_PACKAGE" || -z "$REBUILD_VERSION" || -z "$REBUILD_ECOSYSTEM" ]]; then
+               echo "Single-artifact mode requires --rebuild-package, --rebuild-version and --rebuild-ecosystem" >&2
+               exit 1
+             fi
+             rebuild_args+=(--artifact "$REBUILD_ARTIFACT" --package-name "$REBUILD_PACKAGE"
+               --package-version "$REBUILD_VERSION" --ecosystem "$REBUILD_ECOSYSTEM")
+             [[ -n "$REBUILD_MANIFEST" ]] && rebuild_args+=(--published-manifest "$REBUILD_MANIFEST")
+           else
+             rebuild_args+=(--auto)
+           fi
+           python3 "$ACTION_DIR/rebuild_client.py" "${rebuild_args[@]}"
+        fi
        ;;
   esac
 done

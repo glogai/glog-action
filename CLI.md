@@ -289,31 +289,26 @@ never leave the runner and the server needs no Docker socket.
 
 | Flag | Purpose |
 |---|---|
-| `--rebuild` | Run the reproducible-build worker on this runner |
-| `--rebuild-artifact PATH` | Package artifact present on this runner (required) |
-| `--rebuild-package NAME` | Package name (required) |
-| `--rebuild-version VERSION` | Package version (required) |
-| `--rebuild-ecosystem NAME` | `npm`, `pypi`, `go`, `cargo`, `maven` or `rubygems` (required) |
-| `--rebuild-manifest PATH` | Optional published path-to-SHA256 manifest |
+| `--rebuild` | Discover all pinned dependencies in lockfiles and run the worker for each one |
+| `--rebuild-artifact PATH` | Optional single package artifact; omit for automatic all-dependency mode |
+| `--rebuild-package NAME` | Optional package name for single-artifact mode |
+| `--rebuild-version VERSION` | Optional package version for single-artifact mode |
+| `--rebuild-ecosystem NAME` | Optional ecosystem for single-artifact mode |
+| `--rebuild-manifest PATH` | Optional published path-to-SHA256 manifest for single-artifact mode |
 | `--rebuild-image IMAGE` | Rebuild worker image (default `ghcr.io/glogai/glog-scan-rebuild-4673`) |
 
-`--rebuild-manifest` is optional. When omitted, the Glog server resolves the
-published artifact from its allow-listed registry hosts, hashes it in a worker
-and caches the shared baseline. In that case the rebuild job is first accepted as
-`pending` (HTTP `202`) and is compared automatically once the baseline is ready.
-
-Example:
+Automatic mode needs no package parameters:
 
 ```bash
-./glog.sh scan \
-  --path /repo --lang java --client acme --glogtoken "$GLOG_TOKEN" \
-  --supply-chain --supply-chain-fail-on HIGH \
-  --rebuild \
-  --rebuild-artifact /repo/dist/example-1.2.3.tgz \
-  --rebuild-package example-package \
-  --rebuild-version 1.2.3 \
-  --rebuild-ecosystem npm
+./glog.sh scan --path /repo --client acme --glogtoken "$GLOG_TOKEN" \
+  --supply-chain --rebuild --upload
 ```
+
+Glog reads pinned dependencies from supported lockfiles, downloads their published
+artifacts, processes them in the client-side network-disabled worker, and sends only
+path-to-SHA256 manifests. The default limit is 10,000 dependencies and can be changed
+with `REBUILD_MAX_PACKAGES`. The server fetches and caches the published baseline and
+compares each job asynchronously.
 
 ---
 

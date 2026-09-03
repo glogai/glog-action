@@ -93,18 +93,92 @@ def submit_rebuild(*, api_url: str, token: str, package_name: str, package_versi
     return result
 
 
+def _import_discovery():
+    try:
+        from supply_chain import dependency_discovery as module  # type: ignore
+    except ImportError:
+        import dependency_discovery as module  # type: ignore
+    return module
+
+
+def run_auto(*, api_url: str, token: str, project_path: str, image: str,
+             ecosystems: tuple[str, ...] = (), max_packages: int = 25,
+             source_code_location: str = "") -> dict[str, Any]:
+    """Rebuild every dependency discovered in the project, with no manual input.
+
+    Artifacts are downloaded from the public registry, hashed locally inside the
+    sandboxed worker, and only the resulting manifest is submitted.
+    """
+    discovery = _import_discovery()
+    selected = tuple(ecosystems) or discovery.ECOSYSTEMS
+    dependencies = discovery.discover_dependencies(
+        project_path, ecosystems=selected, max_packages=max_packages
+    )
+    summary: dict[str, Any] = {
+        "mode": "auto",
+        "project_path": str(project_path),
+        "discovered": len(dependencies),
+        "submitted": 0,
+        "failed": 0,
+        "jobs": [],
+        "errors": [],
+    }
+    if not dependencies:
+        return summary
+    with tempfile.TemporaryDirectory(prefix="glog-rebuild-auto-") as temp_dir:
+        for dep in dependencies:
+            label = f"{dep.ecosystem}:{dep.name}@{dep.version}"
+            try:
+                artifact = discovery.download_artifact(dep, temp_dir)
+                result = submit_rebuild(
+                    api_url=api_url, token=token, package_name=dep.name,
+                    package_version=dep.version, ecosystem=dep.ecosystem,
+                    artifact=artifact, published_manifest=None, image=image,
+                    source_code_location=source_code_location,
+                )
+                summary["submitted"] += 1
+                summary["jobs"].append({"package": label, "result": result})
+                print(f"[rebuild] {label}: submitted")
+            except Exception as exc:  # noqa: BLE001 - one bad package must not stop the scan
+                summary["failed"] += 1
+                summary["errors"].append({"package": label, "error": str(exc)[:300]})
+                print(f"[rebuild] {label}: skipped ({str(exc)[:200]})")
+    return summary
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run and submit a client-side reproducible build")
+    parser = argparse.ArgumentParser(description="Run and submit client-side reproducible builds")
     parser.add_argument("--api-url", default=os.getenv("GLOG_API_URL", ""))
     parser.add_argument("--token", default=os.getenv("GLOG_TOKEN", ""))
     parser.add_argument("--image", default=os.getenv("GLOG_REBUILD_IMAGE", "ghcr.io/glogai/glog-scan-rebuild-4673"))
-    parser.add_argument("--artifact", required=True)
+    parser.add_argument("--auto", action="store_true",
+                        help="Discover and rebuild every dependency of --project-path")
+    parser.add_argument("--project-path", default=".")
+    parser.add_argument("--ecosystems", default="",
+                        help="Comma separated subset (npm,pypi,go,cargo,maven,rubygems)")
+    parser.add_argument("--max-packages", type=int, default=int(os.getenv("REBUILD_MAX_PACKAGES", "10000")))
+    parser.add_argument("--artifact", default="")
     parser.add_argument("--published-manifest", default="")
-    parser.add_argument("--package-name", required=True)
+    parser.add_argument("--package-name", default="")
     parser.add_argument("--package-version", default="")
-    parser.add_argument("--ecosystem", required=True, choices=("npm", "pypi", "go", "cargo", "maven", "rubygems"))
+    parser.add_argument("--ecosystem", default="",
+                        choices=("", "npm", "pypi", "go", "cargo", "maven", "rubygems"))
     parser.add_argument("--source-code-location", default="")
     args = parser.parse_args()
+
+    auto = args.auto or not args.artifact
+    if auto:
+        ecosystems = tuple(part.strip() for part in args.ecosystems.split(",") if part.strip())
+        summary = run_auto(
+            api_url=args.api_url, token=args.token, project_path=args.project_path,
+            image=args.image, ecosystems=ecosystems, max_packages=args.max_packages,
+            source_code_location=args.source_code_location,
+        )
+        print(json.dumps(summary, sort_keys=True))
+        return 0
+
+    if not args.package_name or not args.ecosystem:
+        parser.error("--package-name and --ecosystem are required with --artifact")
     result = submit_rebuild(
         api_url=args.api_url, token=args.token, package_name=args.package_name,
         package_version=args.package_version, ecosystem=args.ecosystem,

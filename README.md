@@ -190,12 +190,12 @@ If you see `Unable to upload "./.glog/glog-scan.sarif" as it is not valid SARIF`
 | `supply-chain-cache-only` | No | `false` | Use only cached registry metadata (implies offline). |
 | `supply-chain-fail-on` | No | policy value | Severity threshold override: `INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`. |
 | `supply-chain-format` | No | `both` | Supply-chain output format: `json`, `sarif` or `both`. |
-| `rebuild` | No | `false` | Runs the reproducible-build worker on the runner and uploads only the resulting manifest. |
-| `rebuild-artifact` | With `rebuild` | - | Package artifact present on the runner. |
-| `rebuild-package` | With `rebuild` | - | Package name. |
-| `rebuild-version` | With `rebuild` | - | Package version. |
-| `rebuild-ecosystem` | With `rebuild` | - | `npm`, `pypi`, `go`, `cargo`, `maven` or `rubygems`. |
-| `rebuild-manifest` | No | - | Optional published path-to-SHA256 manifest. Omit it to use the server-side baseline cache. |
+| `rebuild` | No | `false` | Discovers all pinned dependencies in lockfiles, runs the worker on the runner, and uploads only manifests. |
+| `rebuild-artifact` | No | - | Optional single package artifact; omit it for automatic all-dependency mode. |
+| `rebuild-package` | No | - | Optional package name for single-artifact mode. |
+| `rebuild-version` | No | - | Optional package version for single-artifact mode. |
+| `rebuild-ecosystem` | No | - | Optional ecosystem for single-artifact mode: `npm`, `pypi`, `go`, `cargo`, `maven` or `rubygems`. |
+| `rebuild-manifest` | No | - | Optional published path-to-SHA256 manifest for single-artifact mode. |
 | `rebuild-image` | No | `ghcr.io/glogai/glog-scan-rebuild-4673` | Rebuild worker image. |
 
 ### Supply-chain & reproducible-build example
@@ -209,19 +209,15 @@ If you see `Unable to upload "./.glog/glog-scan.sarif" as it is not valid SARIF`
     supply-chain: 'true'
     supply-chain-fail-on: 'HIGH'
     rebuild: 'true'
-    rebuild-artifact: 'dist/example-1.2.3.tgz'
-    rebuild-package: 'example-package'
-    rebuild-version: '1.2.3'
-    rebuild-ecosystem: 'npm'
     github-token: ${{ secrets.PAT_TOKEN }}
     glog-token: ${{ secrets.GLOG_TOKEN }}
 ```
 
-The rebuild worker runs on the runner, so package contents never leave CI — only
-the path-to-SHA256 manifest is submitted. When `rebuild-manifest` is omitted, the
-Glog server fetches and hashes the published artifact itself and caches the shared
-baseline; the job is accepted as `pending` and compared as soon as the baseline is
-ready. Details: [Supply-chain security architecture](../glog-server/docs/docs/architecture/supply-chain-security.md).
+With `rebuild: true`, Glog reads pinned dependencies from supported lockfiles, downloads
+published artifacts, rebuilds them in a network-disabled sandbox on the runner, and
+submits only path-to-SHA256 manifests. Package contents never leave CI. Single-artifact
+flags remain available when a specific artifact must be tested. Details: [Supply-chain
+security architecture](../glog-server/docs/docs/architecture/supply-chain-security.md).
 
 
 

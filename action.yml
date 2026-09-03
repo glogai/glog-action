@@ -115,27 +115,27 @@ inputs:
     required: false
     default: 'both'
   rebuild:
-    description: "Run the reproducible-build worker on the CI runner and submit only its manifest."
+    description: "Discover all pinned dependencies in the repository, run the reproducible-build worker on the CI runner, and submit only manifests."
     required: false
     default: 'false'
   rebuild-artifact:
-    description: "Path to the package artifact on the CI runner."
+    description: "Optional single package artifact. Omit this to process all dependencies from lockfiles automatically."
     required: false
     default: ''
   rebuild-manifest:
-    description: "Path to the published path-to-SHA256 manifest on the CI runner."
+    description: "Optional published path-to-SHA256 manifest for single-artifact mode."
     required: false
     default: ''
   rebuild-package:
-    description: "Package name used for the reproducible-build record."
+    description: "Package name for optional single-artifact mode."
     required: false
     default: ''
   rebuild-version:
-    description: "Package version used for the reproducible-build record."
+    description: "Package version for optional single-artifact mode."
     required: false
     default: ''
   rebuild-ecosystem:
-    description: "Package ecosystem: npm, pypi, go, cargo, maven or rubygems."
+    description: "Package ecosystem for optional single-artifact mode: npm, pypi, go, cargo, maven or rubygems."
     required: false
     default: ''
   rebuild-image:
