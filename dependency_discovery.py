@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ECOSYSTEMS = ("npm", "pypi", "go", "cargo", "maven", "rubygems")
-DEFAULT_MAX_PACKAGES = 25
+DEFAULT_MAX_PACKAGES = 10_000
 MAX_LOCKFILE_BYTES = 20_000_000
 MAX_ARTIFACT_BYTES = 200_000_000
 SKIP_DIRS = {
@@ -46,13 +46,36 @@ def _parse_requirements(text: str) -> list[Dependency]:
         line = raw.split("#", 1)[0].strip()
         if not line or line.startswith("-"):
             continue
-        # Only exact pins can be rebuilt; skip ranges and wildcards (==2.2.*, >=1.0).
-        match = re.match(r"^([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._!+-]+)\s*(?:;.*)?$", line)
-        if match:
-            version = match.group(2).rstrip(".-+!")
+        line = line.split(";", 1)[0].strip()
+        match = re.match(r"^([A-Za-z0-9._-]+)\s*(?:\[[^\]]*\])?\s*(.*)$", line)
+        if not match:
+            continue
+        name, spec = match.group(1).lower(), match.group(2).strip()
+        pin = re.match(r"^==\s*([A-Za-z0-9._!+-]+)$", spec)
+        if pin:
+            version = pin.group(1).rstrip(".-+!")
             if version and "*" not in version:
-                found.append(Dependency("pypi", match.group(1).lower(), version))
+                found.append(Dependency("pypi", name, version))
+                continue
+        # Unpinned / range requirement: resolved to the latest release later.
+        found.append(Dependency("pypi", name, ""))
     return found
+
+
+def _parse_package_json(text: str) -> list[Dependency]:
+    found: list[Dependency] = []
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return found
+    for section in ("dependencies", "devDependencies", "optionalDependencies"):
+        for name, spec in (data.get(section) or {}).items():
+            if not isinstance(spec, str) or spec.startswith(("file:", "link:", "workspace:", "git")):
+                continue
+            exact = re.match(r"^\d+\.\d+\.\d+[A-Za-z0-9.+-]*$", spec.strip())
+            found.append(Dependency("npm", str(name), exact.group(0) if exact else ""))
+    return found
+
 
 
 def _parse_poetry_lock(text: str) -> list[Dependency]:
@@ -168,8 +191,10 @@ def _parse_pom(text: str) -> list[Dependency]:
 
 _PARSERS: dict[str, tuple[str, object]] = {
     "requirements.txt": ("pypi", _parse_requirements),
+    "requirements-dev.txt": ("pypi", _parse_requirements),
     "poetry.lock": ("pypi", _parse_poetry_lock),
     "Pipfile.lock": ("pypi", _parse_pipfile_lock),
+    "package.json": ("npm", _parse_package_json),
     "package-lock.json": ("npm", _parse_package_lock),
     "npm-shrinkwrap.json": ("npm", _parse_package_lock),
     "yarn.lock": ("npm", _parse_yarn_lock),
@@ -180,14 +205,37 @@ _PARSERS: dict[str, tuple[str, object]] = {
 }
 
 
+def latest_version(ecosystem: str, name: str) -> str:
+    """Return the newest published version for an unpinned dependency."""
+    try:
+        if ecosystem == "pypi":
+            data = _fetch_json(f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
+            return str((data.get("info") or {}).get("version") or "")
+        if ecosystem == "npm":
+            data = _fetch_json(f"https://registry.npmjs.org/{urllib.parse.quote(name, safe='@')}")
+            return str((data.get("dist-tags") or {}).get("latest") or "")
+        if ecosystem == "cargo":
+            data = _fetch_json(f"https://crates.io/api/v1/crates/{urllib.parse.quote(name)}")
+            return str((data.get("crate") or {}).get("max_stable_version") or "")
+    except Exception:  # noqa: BLE001 - a registry miss must not stop discovery
+        return ""
+    return ""
+
+
 def discover_dependencies(project_path: str | Path, *, ecosystems: tuple[str, ...] = ECOSYSTEMS,
-                          max_packages: int = DEFAULT_MAX_PACKAGES) -> list[Dependency]:
-    """Return de-duplicated dependencies found in the project's lockfiles."""
+                          max_packages: int = DEFAULT_MAX_PACKAGES,
+                          resolve_unpinned: bool = True) -> list[Dependency]:
+    """Return de-duplicated dependencies found in the project's manifests.
+
+    Requirements without an exact pin are resolved to the registry's latest
+    release so a project with only loose manifests is still fully covered.
+    """
     root = Path(project_path)
     if not root.is_dir():
         return []
     wanted = {eco for eco in ecosystems if eco in ECOSYSTEMS}
     seen: set[tuple[str, str, str]] = set()
+    unpinned: list[Dependency] = []
     result: list[Dependency] = []
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.name not in _PARSERS:
@@ -202,13 +250,33 @@ def discover_dependencies(project_path: str | Path, *, ecosystems: tuple[str, ..
         except OSError:
             continue
         for dep in parser(text):  # type: ignore[operator]
-            if not dep.name or not dep.version or dep.key() in seen:
+            if not dep.name:
+                continue
+            if not dep.version:
+                unpinned.append(dep)
+                continue
+            if dep.key() in seen:
                 continue
             seen.add(dep.key())
             result.append(dep)
             if len(result) >= max_packages:
                 return result
+    if resolve_unpinned:
+        resolved_names: set[tuple[str, str]] = {(dep.ecosystem, dep.name) for dep in result}
+        for dep in unpinned:
+            if (dep.ecosystem, dep.name) in resolved_names or len(result) >= max_packages:
+                continue
+            resolved_names.add((dep.ecosystem, dep.name))
+            version = latest_version(dep.ecosystem, dep.name)
+            if not version:
+                continue
+            pinned = Dependency(dep.ecosystem, dep.name, version)
+            if pinned.key() in seen:
+                continue
+            seen.add(pinned.key())
+            result.append(pinned)
     return result
+
 
 
 def _fetch_json(url: str) -> dict:

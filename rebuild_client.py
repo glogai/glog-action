@@ -24,34 +24,77 @@ def _load_manifest(path: Path) -> dict[str, str]:
     return {str(key): str(digest) for key, digest in value.items()}
 
 
+_PULLED_IMAGES: set[str] = set()
+
+
+def _ensure_image(image: str) -> None:
+    """Pull the worker image once per process, outside the sandboxed run.
+
+    ``docker run --pull always`` mixed the pull progress into stderr, so the
+    real failure (a Python traceback) was cut off by the 500-char error limit.
+    """
+    if image in _PULLED_IMAGES:
+        return
+    pull = subprocess.run(["docker", "pull", "--quiet", image], capture_output=True, text=True,
+                          timeout=900, check=False)
+    if pull.returncode != 0:
+        # Fall back to a locally cached image (offline CI runners); docker run
+        # fails with a clear "No such image" message if there is none.
+        print(f"[rebuild] warning: could not pull {image}: {(pull.stderr or '').strip()[:200]}")
+    _PULLED_IMAGES.add(image)
+
+
+def _error_detail(completed: subprocess.CompletedProcess[str]) -> str:
+    text = (completed.stderr or completed.stdout or "worker failed").strip()
+    lines = [line for line in text.splitlines() if line.strip()]
+    # Keep the *end* of the output: that is where the exception message lives.
+    return " | ".join(lines[-6:])[-700:]
+
+
 def _run_worker(*, image: str, artifact: Path, ecosystem: str) -> dict[str, Any]:
     if shutil.which("docker") is None:
         raise RuntimeError("Docker is required for a client-side reproducible build")
-    if not artifact.is_file():
+    if not artifact.exists():
         raise ValueError(f"artifact does not exist: {artifact}")
+    _ensure_image(image)
 
-    with tempfile.TemporaryDirectory(prefix="glog-rebuild-action-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="glog-rebuild-client-") as temp_dir:
         temp = Path(temp_dir)
         request = temp / "request.json"
         output = temp / "output"
         output.mkdir()
         request.write_text(json.dumps({"ecosystem": ecosystem}), encoding="utf-8")
+        # Older published images shipped the worker as a package module whose
+        # __init__ pulls in third-party deps that are absent offline. Run the
+        # standalone script directly, from whichever path the image has.
+        script = (
+            'for p in /opt/glog-tools/rebuild_worker.py '
+            '/opt/glog-tools/supply_chain/rebuild_worker.py; do '
+            'if [ -f "$p" ]; then exec python "$p" --input /input/request.json --output /output; fi; '
+            'done; echo "rebuild_worker.py not found in image" >&2; exit 127'
+        )
         command = [
-            "docker", "run", "--pull", "always", "--rm",
-            "--network=none", "--read-only", "--cap-drop=ALL",
-            "--security-opt=no-new-privileges", "--pids-limit=256",
-            "--memory=1g", "--cpus=2", "--user=65532:65532",
-            "--tmpfs", "/tmp:rw,noexec,nosuid,size=512m",
+            "docker", "run", "--rm",
+            "--network=none", "--read-only",
+            "--cap-drop=ALL", "--security-opt=no-new-privileges",
+            "--pids-limit=256", "--memory=1g", "--cpus=2",
+            "--user=65532:65532", "--tmpfs", "/tmp:rw,noexec,nosuid,size=512m",
             "-v", f"{artifact.resolve()}:/input/artifact:ro",
             "-v", f"{request}:/input/request.json:ro",
             "-v", f"{output}:/output:rw",
-            image, "--input", "/input/request.json", "--output", "/output",
+            "--entrypoint", "/bin/sh",
+            image, "-c", script,
         ]
+
         completed = subprocess.run(command, capture_output=True, text=True, timeout=1800, check=False)
         if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "worker failed").strip()
-            raise RuntimeError(f"rebuild worker exited with code {completed.returncode}: {detail[:500]}")
-        payload = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            raise RuntimeError(
+                f"rebuild worker exited with code {completed.returncode}: {_error_detail(completed)}"
+            )
+        manifest_file = output / "manifest.json"
+        if not manifest_file.is_file():
+            raise RuntimeError("rebuild worker produced no manifest.json")
+        payload = json.loads(manifest_file.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or not isinstance(payload.get("manifest"), dict):
             raise ValueError("rebuild worker returned an invalid manifest")
         return payload
@@ -124,6 +167,9 @@ def run_auto(*, api_url: str, token: str, project_path: str, image: str,
         "errors": [],
     }
     if not dependencies:
+        print("[rebuild] no dependencies found - checked requirements.txt, package.json, "
+              "lockfiles (poetry/pipenv/npm/yarn/cargo/gem/go.sum) and pom.xml under "
+              f"{project_path}")
         return summary
     with tempfile.TemporaryDirectory(prefix="glog-rebuild-auto-") as temp_dir:
         for dep in dependencies:
