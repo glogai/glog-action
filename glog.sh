@@ -13,6 +13,7 @@ declare -A IMAGE_MAP=(
   [cpp]="glog-scan-cpp-c97a"
   [python]="glog-scan-python-5f95 glog-scan-python-0386 glog-scan-python-4166"
   [secrets]="glog-scan-secrets-f27b"
+  [reachability]="glog-scan-reachability-f820"
   [csharp]="glog-scan-csharp-b460 glog-scan-csharp-6c24"
   [php]="glog-scan-php-7d88 glog-scan-php-4719 glog-scan-php-ba41"
   [kotlin]="glog-scan-kotlin-d734"
@@ -432,6 +433,16 @@ for cmd in "${COMMANDS[@]}"; do
       if [[ ${#LANGUAGES[@]} -eq 0 ]]; then
         # shellcheck disable=SC2207
         LANGUAGES=($(detect_languages "$SCAN_PATH"))
+      fi
+
+      # Reachability is not a language, it is the CPG/dataflow engine that runs
+      # over Python sources. detect_languages maps file EXTENSIONS to scanner
+      # keys, so nothing it returns could ever select it. Chosen here, after
+      # LANGUAGES is populated, so it applies however Python was selected: by
+      # detection or by an explicit -l python. A scan with no Python is
+      # untouched, and -l reachability on its own still works as before.
+      if [[ " ${LANGUAGES[*]} " == *" python "* && " ${LANGUAGES[*]} " != *" reachability "* ]]; then
+        LANGUAGES+=('reachability')
       fi
 
       # SBOM must run BEFORE resolver so the resolver can pick up
