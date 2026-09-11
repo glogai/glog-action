@@ -138,6 +138,10 @@ inputs:
     description: "Package ecosystem for optional single-artifact mode: npm, pypi, go, cargo, maven or rubygems."
     required: false
     default: ''
+  rebuild-max-packages:
+    description: "Maximum number of dependencies verified per run in all-dependency rebuild mode."
+    required: false
+    default: '25'
   rebuild-image:
     description: "Optional fully-qualified rebuild worker image."
     required: false
@@ -364,6 +368,9 @@ runs:
             "--rebuild-version" "${{ inputs.rebuild-version }}"
             "--rebuild-ecosystem" "${{ inputs.rebuild-ecosystem }}"
             "--rebuild-image" "${{ inputs.rebuild-image }}")
+          if [ -n "${{ inputs.rebuild-max-packages }}" ]; then
+            ARGS+=("--max-packages" "${{ inputs.rebuild-max-packages }}")
+          fi
           if [ -n "${{ inputs.rebuild-manifest }}" ]; then
             ARGS+=("--rebuild-manifest" "${{ inputs.rebuild-manifest }}")
           fi

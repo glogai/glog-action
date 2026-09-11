@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -14,6 +15,35 @@ from typing import Any
 
 MAX_MANIFEST_FILES = 100_000
 
+
+
+def _http_error_detail(exc) -> str:
+    """Turn a Django/DRF error body into one short readable line."""
+    raw = ""
+    try:
+        raw = exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        pass
+    stripped = raw.strip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            payload = json.loads(stripped)
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            detail = payload.get("detail") or payload.get("message") or ""
+            error = payload.get("error") or ""
+            if detail and error and str(error) not in str(detail):
+                # Real (SQL) error first, generic hint second.
+                return f"{' '.join(str(error).split())[:300]} ({str(detail)[:200]})"
+            if detail or error:
+                return str(detail or error)[:400]
+        if payload is not None:
+            return json.dumps(payload)[:300]
+    match = re.search(r"<title>(.*?)</title>", raw, re.S | re.I)
+    if match:
+        return " ".join(match.group(1).split())[:300]
+    return " ".join(stripped.split())[:300] or f"HTTP {exc.code}"
 
 def _load_manifest(path: Path) -> dict[str, str]:
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -64,6 +94,13 @@ def _run_worker(*, image: str, artifact: Path, ecosystem: str) -> dict[str, Any]
         output = temp / "output"
         output.mkdir()
         request.write_text(json.dumps({"ecosystem": ecosystem}), encoding="utf-8")
+        # The worker runs as uid 65532 inside the sandbox, while these paths are
+        # created by the host user with 0600/0700 modes. Without widening them
+        # the container cannot read request.json nor write manifest.json
+        # (PermissionError from pathlib.Path.write_text).
+        os.chmod(temp, 0o755)
+        os.chmod(request, 0o644)
+        os.chmod(output, 0o777)
         # Older published images shipped the worker as a package module whose
         # __init__ pulls in third-party deps that are absent offline. Run the
         # standalone script directly, from whichever path the image has.
@@ -100,6 +137,16 @@ def _run_worker(*, image: str, artifact: Path, ecosystem: str) -> dict[str, Any]
         return payload
 
 
+def _auth_header(token: str) -> str:
+    """CLI/CI tokens are DRF auth tokens; browser sessions use JWT bearers."""
+    raw = (token or "").strip()
+    if re.fullmatch(r"[0-9a-fA-F]{40}", raw):
+        return f"Token {raw}"
+    if raw.count(".") == 2:
+        return f"Bearer {raw}"
+    return f"Token {raw}"
+
+
 def submit_rebuild(*, api_url: str, token: str, package_name: str, package_version: str,
                    ecosystem: str, artifact: Path, published_manifest: Path | None, image: str,
                    source_code_location: str = "") -> dict[str, Any]:
@@ -117,19 +164,21 @@ def submit_rebuild(*, api_url: str, token: str, package_name: str, package_versi
     if published_manifest:
         body["published_manifest"] = _load_manifest(published_manifest)
     if source_code_location:
-        body["source_code_location"] = int(source_code_location)
+        # CI normally receives the immutable SCL UUID. Resolution belongs to
+        # the tenant-aware server; legacy numeric IDs remain valid there too.
+        body["source_code_location"] = str(source_code_location).strip()
     endpoint = api_url.rstrip("/") + "/api/supply-chain/rebuild-jobs/"
     request = urllib.request.Request(
         endpoint,
         data=json.dumps(body).encode("utf-8"),
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        headers={"Authorization": _auth_header(token), "Content-Type": "application/json"},
         method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
+        detail = _http_error_detail(exc)
         raise RuntimeError(f"server rejected rebuild manifest ({exc.code}): {detail}") from exc
     if not isinstance(result, dict):
         raise ValueError("server returned an invalid rebuild response")

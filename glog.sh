@@ -65,6 +65,7 @@ Options:
    --rebuild-version VERSION    Package version for single-artifact mode
    --rebuild-ecosystem NAME     npm, pypi, go, cargo, maven or rubygems (single-artifact mode)
    --rebuild-image IMAGE        Rebuild worker image
+   --max-packages N             Cap dependencies verified in all-dependency rebuild mode
 
 
 EOF
@@ -336,6 +337,9 @@ REBUILD_PACKAGE="${REBUILD_PACKAGE:-}"
 REBUILD_VERSION="${REBUILD_VERSION:-}"
 REBUILD_ECOSYSTEM="${REBUILD_ECOSYSTEM:-}"
 REBUILD_IMAGE="${REBUILD_IMAGE:-ghcr.io/glogai/glog-scan-rebuild-4673}"
+# Bounded all-dependency mode: every package is downloaded and hashed, so an
+# unbounded run would make the scan far too slow on large lockfiles.
+REBUILD_MAX_PACKAGES="${REBUILD_MAX_PACKAGES:-}"
 
 
 while [[ $# -gt 0 ]]; do
@@ -382,6 +386,7 @@ while [[ $# -gt 0 ]]; do
      --rebuild-version) REBUILD_VERSION="$2"; shift 2 ;;
      --rebuild-ecosystem) REBUILD_ECOSYSTEM="$2"; shift 2 ;;
      --rebuild-image) REBUILD_IMAGE="$2"; shift 2 ;;
+     --max-packages|--rebuild-max-packages) REBUILD_MAX_PACKAGES="$2"; shift 2 ;;
      -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -490,6 +495,7 @@ for cmd in "${COMMANDS[@]}"; do
              [[ -n "$REBUILD_MANIFEST" ]] && rebuild_args+=(--published-manifest "$REBUILD_MANIFEST")
            else
              rebuild_args+=(--auto)
+             [[ -n "$REBUILD_MAX_PACKAGES" ]] && rebuild_args+=(--max-packages "$REBUILD_MAX_PACKAGES")
            fi
            python3 "$ACTION_DIR/rebuild_client.py" "${rebuild_args[@]}"
         fi
