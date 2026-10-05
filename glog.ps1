@@ -12,6 +12,7 @@ $imageMap = @{
     cpp          = @('glog-scan-cpp-c97a')
     python       = @('glog-scan-python-5f95', 'glog-scan-python-0386', 'glog-scan-python-4166')
     secrets      = @('glog-scan-secrets-f27b')
+    reachability = @('glog-scan-reachability-f820')
     csharp       = @('glog-scan-csharp-b460', 'glog-scan-csharp-6c24')
     php          = @('glog-scan-php-7d88', 'glog-scan-php-4719', 'glog-scan-php-ba41')
     kotlin       = @('glog-scan-kotlin-d734')
@@ -563,6 +564,16 @@ try {
                     foreach ($lang in $detected) {
                         [void]$languages.Add($lang)
                     }
+                }
+
+                # Reachability is not a language, it is the CPG/dataflow engine
+                # that runs over Python sources. Get-DetectedLanguages maps file
+                # EXTENSIONS to scanner keys, so nothing it returns could ever
+                # select it. Chosen here, after $languages is populated, so it
+                # applies however Python was selected: by detection or by an
+                # explicit -l python. A scan with no Python is untouched.
+                if ($languages -contains 'python') {
+                    [void]$languages.Add('reachability')
                 }
 
                 # SBOM must run BEFORE resolver so the resolver can pick up

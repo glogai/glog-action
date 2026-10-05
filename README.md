@@ -217,7 +217,7 @@ With `rebuild: true`, Glog reads pinned dependencies from supported lockfiles, d
 published artifacts, rebuilds them in a network-disabled sandbox on the runner, and
 submits only path-to-SHA256 manifests. Package contents never leave CI. Single-artifact
 flags remain available when a specific artifact must be tested. Details: [Supply-chain
-security architecture](../glog-server/docs/docs/architecture/supply-chain-security.md).
+security architecture](../glog-server/docs/docs/software-security/architecture/supply-chain-security.md).
 
 
 
