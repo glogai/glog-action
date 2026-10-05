@@ -474,10 +474,18 @@ for cmd in "${COMMANDS[@]}"; do
        verify_scan_artifacts "$PROJECT_PATH"
 
         if [[ "$REBUILD" == "true" ]]; then
-           if [[ -z "$GLOG_API_URL" || -z "$GLOG_TOKEN" ]]; then
-             echo "Rebuild submission requires GLOG_API_URL and GLOG_TOKEN" >&2
-             exit 1
+           if [[ -z "$GLOG_API_URL" && -n "$CLIENT" ]]; then
+             # The resolver image carries its own server URL; the host-side rebuild
+             # client does not, so derive the tenant URL from client and env.
+             case "${ENV,,}" in
+               dev|development) GLOG_API_URL="https://${CLIENT}.dev.glog.ai" ;;
+               *) GLOG_API_URL="https://${CLIENT}.glog.ai" ;;
+             esac
+             echo "Rebuild: --api-url not set, using $GLOG_API_URL"
            fi
+           if [[ -z "$GLOG_API_URL" || -z "$GLOG_TOKEN" ]]; then
+             echo "Warning: rebuild skipped, it requires GLOG_API_URL (--api-url) and GLOG_TOKEN" >&2
+           else
            echo "Running reproducible-build worker for all discovered dependencies"
            rebuild_args=(
              --api-url "$GLOG_API_URL" --token "$GLOG_TOKEN" --image "$REBUILD_IMAGE"
@@ -497,7 +505,9 @@ for cmd in "${COMMANDS[@]}"; do
              rebuild_args+=(--auto)
              [[ -n "$REBUILD_MAX_PACKAGES" ]] && rebuild_args+=(--max-packages "$REBUILD_MAX_PACKAGES")
            fi
-           python3 "$ACTION_DIR/rebuild_client.py" "${rebuild_args[@]}"
+           python3 "$ACTION_DIR/rebuild_client.py" "${rebuild_args[@]}" \
+             || echo "Warning: rebuild submission failed; SARIF/SBOM results are unaffected" >&2
+           fi
         fi
        ;;
   esac
