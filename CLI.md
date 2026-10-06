@@ -360,3 +360,11 @@ falls back to single-item calls automatically.
   --env dev `
   --sarif-format-type STANDARD
 ```
+
+## depscan VDB cache
+
+For the `oss`/`vex` scanner, `glog.sh` mounts a host cache `~/.glog-vdb` (override with
+`GLOG_VDB_CACHE_DIR`, disable with `GLOG_VDB_CACHE=false`) at `/vdb`. A cold cache is seeded
+from the DB baked into the image; depscan refreshes it when older than `VDB_AGE_HOURS`
+(default 168, i.e. once a week). The GitHub Action persists it with `actions/cache`
+(`vdb-cache`, `vdb-age-hours` inputs).

@@ -63,6 +63,22 @@ inputs:
     description: "Generate a CycloneDX SBOM via the resolver scanner (passes --with-sbom). If on-prem-upload=true the SBOM is also persisted on the server alongside the SARIF; otherwise it stays local in .glog/. Default is false."
     required: false
     default: 'false'
+  vex:
+    description: "Generate a CycloneDX VEX with OWASP depscan over the source code, using the SBOM of this run as input and reachability analysis (implies sbom=true). Uploaded to the Glog server with on-prem-upload=true, otherwise kept in .glog/vex.cdx.json. PREREQUISITE: install dependencies in the workspace before this step (npm ci, a venv inside the repo with requirements installed, mvn dependency:resolve / gradle dependencies, go mod download, dotnet restore); without them most vulnerabilities stay in_triage. Default is false."
+    required: false
+    default: "false"
+  vex-reachability:
+    description: "Run depscan reachability analysis for the VEX (default true). When false every statement is in_triage."
+    required: false
+    default: "true"
+  vdb-cache:
+    description: "Cache the depscan vulnerability DB in ~/.glog-vdb between runs (actions/cache). Cold cache is seeded from the DB baked into the scanner image. Default true."
+    required: false
+    default: "true"
+  vdb-age-hours:
+    description: "depscan refreshes the cached DB when it is older than this many hours. Default 168 (once a week)."
+    required: false
+    default: "168"
   sbom-only:
     description: "Skip SARIF and only produce the SBOM (passes --sbom-only to the resolver). Implies sbom=true. Default is false."
     required: false
@@ -292,6 +308,28 @@ runs:
         }
       shell: bash
 
+    # depscan vulnerability DB (VDB) cache. The scanner image ships a baked
+    # baseline; glog.sh seeds ~/.glog-vdb from it on a cold cache, depscan
+    # refreshes it when older than VDB_AGE_HOURS, and actions/cache persists
+    # the refreshed copy (saved in the post step). Weekly key + restore prefix
+    # means a new entry is written at most once per week per repo.
+    - name: Compute depscan VDB cache key
+      id: vdbkey
+      if: ${{ inputs.vdb-cache == 'true' && (inputs.vex == 'true' || inputs.sbom == 'true' || inputs.sbom-only == 'true') }}
+      run: |
+        mkdir -p "$HOME/.glog-vdb"
+        echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      shell: bash
+
+    - name: Restore depscan VDB cache
+      if: ${{ steps.vdbkey.outputs.week != '' }}
+      uses: actions/cache@v4
+      with:
+        path: ~/.glog-vdb
+        key: glog-vdb-${{ runner.os }}-v6-${{ steps.vdbkey.outputs.week }}
+        restore-keys: |
+          glog-vdb-${{ runner.os }}-v6-
+
     - name: Glog Scan
       run: |
         TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE/${{ inputs.path }} --registry ghcr.io/glogai/" 
@@ -325,6 +363,10 @@ runs:
         if [ "${{ inputs.sbom-only }}" = "true" ]; then
           ARGS+=("--sbom-only")
         fi
+        if [ "${{ inputs.vex }}" = "true" ]; then
+          ARGS+=("--vex")
+        fi
+        export GLOG_VEX_REACHABILITY="${{ inputs.vex-reachability }}"
         if [ -n "${{ inputs.scl-uuid }}" ]; then
           ARGS+=("--scl-uuid" "${{ inputs.scl-uuid }}")
         fi
@@ -379,6 +421,8 @@ runs:
         $TOOL_CMD "${ARGS[@]}"
       shell: bash
       env:
+        GLOG_VDB_CACHE: ${{ inputs.vdb-cache }}
+        VDB_AGE_HOURS: ${{ inputs.vdb-age-hours }}
         GLOG_TOKEN: ${{ inputs.glog-token }}
         GLOG_COMPONENT: ${{ github.event.repository.name }}
         GLOG_BRANCH: ${{ github.head_ref != '' && github.head_ref || github.ref_name }}
@@ -418,6 +462,11 @@ runs:
             echo "- SBOM: **missing**"
           else
             echo "- SBOM: not requested"
+          fi
+          if ls "$GLOG_DIR"/vex.cdx.json >/dev/null 2>&1; then
+            echo "- VEX: \`vex.cdx.json\` present (depscan + reachability; accuracy depends on installed dependencies)"
+          elif [ "${{ inputs.vex }}" = "true" ]; then
+            echo "- VEX: **missing**"
           fi
           echo "- Server upload: ${{ inputs.on-prem-upload }}"
         } >> "$GITHUB_STEP_SUMMARY"

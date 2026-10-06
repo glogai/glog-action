@@ -292,3 +292,13 @@ For manual usage of local helper scripts (`glog.sh` for Bash and `glog.ps1` for 
 ## Support
 
 Open an issue in this repository or contact `info@glog.ai`.
+
+## VEX (depscan + reachability)
+
+Set `vex: 'true'` to produce `.glog/vex.cdx.json` with OWASP depscan over the source,
+using the SBOM of the same run as input and reachability analysis. With
+`on-prem-upload: 'true'` it is uploaded to the Glog server and applied to SCA findings.
+
+**Install dependencies before the Glog step** (`npm ci`, a `.venv` inside the repo with
+requirements installed, `mvn dependency:resolve`, `go mod download`, `dotnet restore`).
+Without them reachability cannot prove packages unused and most results stay `in_triage`.

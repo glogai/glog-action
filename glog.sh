@@ -25,7 +25,49 @@ declare -A IMAGE_MAP=(
   # CycloneDX SBOM generator (cdxgen). Writes /app/.glog/sbom.cdx.json which
   # the resolver (running after) uploads to /api/sca/resolver/sbom/.
   [sbom]="glog-scan-sbom-9828"
+  # VEX: depscan over the source with the SBOM as input + reachability.
+  # Writes /app/.glog/vex.cdx.json; uploaded after the resolver pass.
+  [vex]="glog-scan-oss-cc90"
 )
+
+upload_vex() {
+  local vex_file="$1/.glog/vex.cdx.json"
+  if [[ ! -s "$vex_file" ]]; then
+    echo "WARNING: VEX requested but $vex_file was not produced."
+    return 0
+  fi
+  if [[ "$RESOLVER_UPLOAD" != "true" || "$PRIVACY_TIER" == "none" ]]; then
+    echo "VEX kept locally: $vex_file"
+    return 0
+  fi
+  local api="${GLOG_API_URL:-}"
+  if [[ -z "$api" && -n "$CLIENT" ]]; then
+    case "${ENV,,}" in
+      dev|development) api="https://${CLIENT}.dev.glog.ai" ;;
+      *) api="https://${CLIENT}.glog.ai" ;;
+    esac
+  fi
+  if [[ -z "$api" || -z "${GLOG_TOKEN:-}" ]]; then
+    echo "WARNING: VEX not uploaded (GLOG_API_URL / GLOG_TOKEN missing)."
+    return 0
+  fi
+  local sbom_serial=""
+  if [[ -s "$1/.glog/sbom.cdx.json" ]]; then
+    sbom_serial=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("serialNumber",""))' "$1/.glog/sbom.cdx.json" 2>/dev/null || true)
+  fi
+  local code
+  code=$(curl -sS -o /tmp/glog-vex-upload.json -w '%{http_code}' -X POST \
+    -H "Authorization: Token ${GLOG_TOKEN}" \
+    -F "vex_file=@${vex_file};type=application/json" \
+    -F "sbom_serial=${sbom_serial}" \
+    -F "scl_uuid=${SCL_UUID:-}" \
+    "${api%/}/api/sca/resolver/vex/" || echo 000)
+  if [[ "$code" == "201" ]]; then
+    echo "VEX uploaded: $(cat /tmp/glog-vex-upload.json)"
+  else
+    echo "WARNING: VEX upload failed (HTTP $code): $(head -c 300 /tmp/glog-vex-upload.json 2>/dev/null)"
+  fi
+}
 
 usage() {
   cat <<'EOF'
@@ -48,6 +90,9 @@ Options:
   --inventory               Force the inventory scanner to run (in addition to detected languages)
   --sbom                    Generate a CycloneDX SBOM via resolver (--with-sbom)
   --sbom-only               Skip SARIF, only produce the SBOM (implies --sbom)
+  --vex                     Generate a VEX with depscan + reachability (implies --sbom).
+                            Install dependencies first (npm ci, venv in the repo, mvn
+                            dependency:resolve, ...) or most results stay in_triage.
   --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
   --privacy-tier TIER       full (default) | metrics | none. Controls what leaves the tenant.
   --mock-resolver           Serve AI answers from the server-side OpenAI mock (no OpenAI cost;
@@ -249,7 +294,31 @@ scan_lang() {
       EXTRA_ARGS+=(-e FETCH_LICENSE=false)
     fi
 
+    if [[ "$lang" == "vex" ]]; then
+      EXTRA_ARGS+=(-e GLOG_VEX=true)
+      EXTRA_ARGS+=(-e GLOG_VEX_REACHABILITY="${GLOG_VEX_REACHABILITY:-true}")
+    fi
+
     local run_image="${registry}${image_name}"
+
+    # Host-side depscan VDB cache (baked baseline + incremental refresh).
+    # A named volume (GLOG_DEPSCAN_VDB_VOLUME) takes precedence.
+    if [[ "$image_name" == glog-scan-oss-cc90* && -z "${GLOG_DEPSCAN_VDB_VOLUME:-}" \
+          && "${GLOG_VDB_CACHE:-true}" == "true" ]]; then
+      local vdb_dir="${GLOG_VDB_CACHE_DIR:-${HOME}/.glog-vdb}"
+      mkdir -p "$vdb_dir"
+      if [[ -z "$(ls -A "$vdb_dir" 2>/dev/null)" ]]; then
+        echo "Seeding depscan VDB cache at $vdb_dir from image baseline..."
+        docker pull -q "$run_image" > /dev/null || true
+        # Mount the host dir at /seed (not /vdb) so the baked /vdb stays visible.
+        docker run --rm --entrypoint sh -v "$vdb_dir":/seed "$run_image" \
+          -c 'cp -a /vdb/. /seed/ 2>/dev/null; chown -R '"$(id -u):$(id -g)"' /seed' \
+          || echo "WARNING: VDB seed failed; depscan will download the DB."
+      else
+        echo "Using cached depscan VDB at $vdb_dir ($(du -sh "$vdb_dir" 2>/dev/null | cut -f1))"
+      fi
+      EXTRA_ARGS+=(-v "$vdb_dir":/vdb -e VDB_HOME=/vdb -e VDB_AGE_HOURS="${VDB_AGE_HOURS:-168}")
+    fi
 
     docker run --pull always --rm \
       "${EXTRA_ARGS[@]}" \
@@ -319,6 +388,7 @@ FILES=()
 TEMP_SCAN_DIR=""
 RESOLVER_UPLOAD=false
 WITH_SBOM=false
+WITH_VEX=false
 SBOM_ONLY=false
 SCL_UUID=""
 FORCE_INVENTORY=false
@@ -369,6 +439,7 @@ while [[ $# -gt 0 ]]; do
      -u|--upload) RESOLVER_UPLOAD=true; shift ;;
     --inventory) FORCE_INVENTORY=true; shift ;;
     --sbom) WITH_SBOM=true; shift ;;
+    --vex) WITH_VEX=true; WITH_SBOM=true; shift ;;
     --sbom-only) SBOM_ONLY=true; WITH_SBOM=true; shift ;;
     --scl-uuid) SCL_UUID="$2"; shift 2 ;;
     --privacy-tier) PRIVACY_TIER="$2"; shift 2 ;;
@@ -457,6 +528,10 @@ for cmd in "${COMMANDS[@]}"; do
         for _l in "${LANGUAGES[@]}"; do [[ "$_l" == "sbom" ]] && _HAS_SBOM=true; done
         [[ "$_HAS_SBOM" == "false" ]] && LANGUAGES+=('sbom')
       fi
+      # VEX needs the SBOM of this run, so it is queued after it.
+      if [[ "$WITH_VEX" == "true" ]]; then
+        LANGUAGES+=('vex')
+      fi
 
       # Resolver passes. When the platform (committed / native SARIF UI) needs a
       # different structure than the Glog server, the resolver runs twice:
@@ -478,6 +553,10 @@ for cmd in "${COMMANDS[@]}"; do
       else
         echo "Resolver pass: format=$SARIF_FORMAT_TYPE upload=$RESOLVER_UPLOAD"
         scan_lang "resolver" "$SCAN_PATH" "$IGNORE" "$CLIENT" "$ENV" "$REGISTRY" "$SARIF_FORMAT_TYPE" "$RESOLVER_UPLOAD" "$PRIVACY_TIER" "$GLOG_API_URL"
+      fi
+
+      if [[ "$WITH_VEX" == "true" ]]; then
+        upload_vex "$SCAN_PATH"
       fi
 
 

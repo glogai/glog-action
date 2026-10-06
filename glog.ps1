@@ -23,6 +23,8 @@ $imageMap = @{
     # CycloneDX SBOM generator (cdxgen). Writes /app/.glog/sbom.cdx.json which
     # the resolver (running after) uploads to /api/sca/resolver/sbom/.
     sbom         = @('glog-scan-sbom-9828')
+    # VEX: depscan + reachability over the source, SBOM of this run as input.
+    vex          = @('glog-scan-oss-cc90')
 }
 
 function Show-Usage {
@@ -44,6 +46,8 @@ Options:
   --inventory               Force the inventory scanner to run (in addition to detected languages)
   --sbom                    Generate a CycloneDX SBOM via resolver (--with-sbom)
   --sbom-only               Skip SARIF, only produce the SBOM (implies --sbom)
+  --vex                     Generate a VEX with depscan + reachability (implies --sbom).
+                            Install dependencies first or most results stay in_triage.
   --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
 '@ | Write-Output
 }
@@ -270,6 +274,10 @@ function Invoke-ScanLang {
             Write-Output "--> Running scanner: $Registry$imageName"
 
             $extraArgs = @()
+            if ($Lang -eq 'vex') {
+                $reach = if ($env:GLOG_VEX_REACHABILITY) { $env:GLOG_VEX_REACHABILITY } else { 'true' }
+                $extraArgs += @('-e', 'GLOG_VEX=true', '-e', "GLOG_VEX_REACHABILITY=$reach")
+            }
             if ($imageName -like 'glog-scan-sbom-9828*') {
                 # SBOM (cdxgen + mvnw) needs network egress to Maven Central / npm registry
                 # and a persistent Maven cache to avoid re-downloading plugins each run.
@@ -373,6 +381,32 @@ $client = ''
 $environmentName = ''
 $registry = 'ghcr.io/glogai/'
 $projectPath = (Get-Location).Path
+function Send-GlogVex {
+    param([string]$ScanPath, [string]$ResolverUpload, [string]$PrivacyTier, [string]$ApiUrl,
+          [string]$Client, [string]$EnvironmentName, [string]$GlogToken, [string]$SclUuid)
+    $vexFile = Join-Path -Path $ScanPath -ChildPath '.glog/vex.cdx.json'
+    if (-not (Test-Path -LiteralPath $vexFile)) { Write-Output "WARNING: VEX requested but $vexFile was not produced."; return }
+    if ($ResolverUpload -ne 'true' -or $PrivacyTier -eq 'none') { Write-Output "VEX kept locally: $vexFile"; return }
+    $api = $ApiUrl
+    if (-not $api -and $Client) {
+        $api = if ($EnvironmentName -match '^(dev|development)$') { "https://$Client.dev.glog.ai" } else { "https://$Client.glog.ai" }
+    }
+    if (-not $api -or -not $GlogToken) { Write-Output 'WARNING: VEX not uploaded (API URL / token missing).'; return }
+    $serial = ''
+    $sbomFile = Join-Path -Path $ScanPath -ChildPath '.glog/sbom.cdx.json'
+    if (Test-Path -LiteralPath $sbomFile) {
+        try { $serial = (Get-Content -LiteralPath $sbomFile -Raw | ConvertFrom-Json).serialNumber } catch { $serial = '' }
+    }
+    try {
+        $out = & curl.exe -sS -X POST -H "Authorization: Token $GlogToken" `
+            -F "vex_file=@$vexFile;type=application/json" -F "sbom_serial=$serial" -F "scl_uuid=$SclUuid" `
+            "$($api.TrimEnd('/'))/api/sca/resolver/vex/"
+        Write-Output "VEX upload response: $out"
+    } catch {
+        Write-Output "WARNING: VEX upload failed: $_"
+    }
+}
+
 $glogToken = if ($env:GLOG_TOKEN) { $env:GLOG_TOKEN } else { '' }
 $sarifFormatType = if ($env:SARIF_FORMAT_TYPE) { $env:SARIF_FORMAT_TYPE } else { 'GITHUB' }
 $resolverUpload = 'false'
@@ -380,6 +414,7 @@ $files = [System.Collections.Generic.List[string]]::new()
 $tempScanDir = $null
 $withSbom = 'false'
 $sbomOnly = 'false'
+$withVex = 'false'
 $sclUuid = ''
 $forceInventory = $false
 $privacyTier = if ($env:PRIVACY_TIER) { $env:PRIVACY_TIER } else { 'full' }
@@ -485,6 +520,12 @@ while ($index -lt $scriptArgs.Count) {
             $index++
             continue
         }
+        '--vex' {
+            $withSbom = 'true'
+            $withVex = 'true'
+            $index++
+            continue
+        }
         '--sbom-only' {
             $withSbom = 'true'
             $sbomOnly = 'true'
@@ -581,6 +622,9 @@ try {
                 if ($withSbom -eq 'true' -and -not ($languages -contains 'sbom')) {
                     [void]$languages.Add('sbom')
                 }
+                if ($withVex -eq 'true') {
+                    [void]$languages.Add('vex')
+                }
 
                 [void]$languages.Add('resolver')
 
@@ -596,6 +640,10 @@ try {
                     Write-Output "Analyzing language: $lang"
                     if ($privacyTier -notin @('full','metrics','none')) { throw "Invalid --privacy-tier: $privacyTier (expected: full, metrics, none)" }
                     Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken -ResolverUpload $resolverUpload -WithSbom $withSbom -SbomOnly $sbomOnly -SbomMode $sbomMode -SclUuid $sclUuid -ForceInventory $forceInventoryFlag -PrivacyTier $privacyTier -ApiUrl $apiUrl
+                }
+
+                if ($withVex -eq 'true') {
+                    Send-GlogVex -ScanPath $scanPath -ResolverUpload $resolverUpload -PrivacyTier $privacyTier -ApiUrl $apiUrl -Client $client -EnvironmentName $environmentName -GlogToken $glogToken -SclUuid $sclUuid
                 }
 
                 Persist-ScopedScanArtifacts -ScanPath $scanPath -ProjectPath $projectPath
