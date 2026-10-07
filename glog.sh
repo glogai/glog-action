@@ -97,7 +97,11 @@ Options:
   --privacy-tier TIER       full (default) | metrics | none. Controls what leaves the tenant.
   --mock-resolver           Serve AI answers from the server-side OpenAI mock (no OpenAI cost;
                             simulated latency and Tier 5 rate limits). Testing only.
-  --api-url URL             Override Glog.AI server URL (default: from image config)
+  --api-url URL             Server URL for the host-side uploads (VEX, rebuild). The resolver
+                            derives its own URL from --client/--env (dev -> <client>.dev.glog.ai,
+                            localhost -> http://<client>.localhost:8000), so with --upload the
+                            two must agree or the scan is refused.
+  --fail-on-upload-error    Exit 2 when the resolver reports UPLOAD_FAILED (default: warn only)
   --supply-chain             Run the bounded supply-chain scan
   --supply-chain-policy FILE  Enable scanning with a policy file relative to --path
   --supply-chain-offline      Disable registry network access; use only the persistent cache
@@ -121,6 +125,7 @@ cleanup() {
   if [[ -n "${TEMP_SCAN_DIR:-}" && -d "${TEMP_SCAN_DIR:-}" ]]; then
     rm -rf "$TEMP_SCAN_DIR"
   fi
+  [[ -n "${SCAN_START_STAMP:-}" ]] && rm -f "$SCAN_START_STAMP"
 }
 
 trap cleanup EXIT
@@ -284,10 +289,27 @@ scan_lang() {
     fi
 
     EXTRA_ARGS=()
+    # A local dev server (GLOG_API_URL=http://test.localhost:8000) binds
+    # 127.0.0.1 only and its *.localhost name does not resolve inside a
+    # container, so join the host network and pin the name to loopback.
+    # The resolver ignores GLOG_API_URL and derives the host from CLIENT/ENV:
+    # --env localhost means http://<client>.localhost:8000/api/.
+    local api_host=""
+    if [[ "${env,,}" == "localhost" && -n "$client" ]]; then
+      api_host="$client.localhost"
+    elif [[ -n "$api_url" ]]; then
+      api_host=$(printf '%s' "$api_url" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')
+    fi
+    local host_network="false"
+    if [[ "$api_host" == *.localhost || "$api_host" == "localhost" ]]; then
+      EXTRA_ARGS+=(--network host --add-host "$api_host:127.0.0.1")
+      host_network="true"
+    fi
+
     if [[ "$image_name" == glog-scan-sbom-9828* ]]; then
       # SBOM (cdxgen + mvnw) needs network egress to Maven Central / npm registry
       # and a persistent Maven cache to avoid re-downloading plugins each run.
-      EXTRA_ARGS+=(--network host)
+      [[ "$host_network" == "true" ]] || EXTRA_ARGS+=(--network host)
       mkdir -p "${HOME}/.glog-m2"
       EXTRA_ARGS+=(-v "${HOME}/.glog-m2:/root/.m2")
       EXTRA_ARGS+=(-e CDXGEN_TIMEOUT_MS=600000)
@@ -394,6 +416,10 @@ SCL_UUID=""
 FORCE_INVENTORY=false
 PRIVACY_TIER="${PRIVACY_TIER:-full}"
 MOCK_RESOLVER="${MOCK_RESOLVER:-false}"
+FAIL_ON_UPLOAD_ERROR="${FAIL_ON_UPLOAD_ERROR:-false}"
+UPLOAD_FAILED=false
+# Touched when a scan starts; .glog/glog-scan.log is trusted only if newer.
+SCAN_START_STAMP="$(mktemp -t glog-scan-start.XXXXXX)"
 GLOG_API_URL="${GLOG_API_URL:-}"
 SUPPLY_CHAIN_ENABLED="${SUPPLY_CHAIN_ENABLED:-false}"
 SUPPLY_CHAIN_POLICY="${SUPPLY_CHAIN_POLICY:-}"
@@ -444,6 +470,7 @@ while [[ $# -gt 0 ]]; do
     --scl-uuid) SCL_UUID="$2"; shift 2 ;;
     --privacy-tier) PRIVACY_TIER="$2"; shift 2 ;;
     --mock-resolver) MOCK_RESOLVER=true; shift ;;
+    --fail-on-upload-error) FAIL_ON_UPLOAD_ERROR=true; shift ;;
     --api-url) GLOG_API_URL="$2"; shift 2 ;;
     --supply-chain) SUPPLY_CHAIN_ENABLED=true; shift ;;
     --supply-chain-policy) SUPPLY_CHAIN_POLICY="$2"; SUPPLY_CHAIN_ENABLED=true; shift 2 ;;
@@ -468,6 +495,27 @@ case "$PRIVACY_TIER" in
   full|metrics|none) ;;
   *) echo "Invalid --privacy-tier: $PRIVACY_TIER (expected: full, metrics, none)"; exit 1 ;;
 esac
+
+# The resolver (GlogService.buildBaseUrl) ignores GLOG_API_URL and derives the
+# server from CLIENT/ENV. An --api-url that names a different host would send
+# the host-side uploads to one server and the resolver's findings to another
+# (a 2026-10-07 benchmark run with --env dev went to the remote dev tenant
+# while --api-url pointed at localhost), so refuse that combination up front.
+resolver_server_url() {
+  local client="${CLIENT:-test}" env="${ENV,,}"
+  if [[ -z "$env" ]]; then echo "https://$client.glog.ai"
+  elif [[ "$env" == "localhost" ]]; then echo "http://$client.localhost:8000"
+  else echo "https://$client.$env.glog.ai"
+  fi
+}
+if [[ -n "$GLOG_API_URL" && "$RESOLVER_UPLOAD" == "true" ]]; then
+  _api_norm="${GLOG_API_URL%/}"; _api_norm="${_api_norm%/api}"
+  if [[ "$_api_norm" != "$(resolver_server_url)" ]]; then
+    echo "ERROR: --api-url is $GLOG_API_URL but the resolver will upload to $(resolver_server_url) (derived from --client/--env)." >&2
+    echo "       For a local server pass --env localhost; for a hosted tenant drop --api-url or make it match." >&2
+    exit 1
+  fi
+fi
 
 export WITH_SBOM SBOM_ONLY SCL_UUID FORCE_INVENTORY PRIVACY_TIER GLOG_API_URL MOCK_RESOLVER
 export SUPPLY_CHAIN_ENABLED SUPPLY_CHAIN_POLICY SUPPLY_CHAIN_OFFLINE SUPPLY_CHAIN_CACHE_ONLY SUPPLY_CHAIN_FAIL_ON SUPPLY_CHAIN_FORMAT
@@ -499,6 +547,7 @@ for cmd in "${COMMANDS[@]}"; do
       ;;
     scan)
       SCAN_PATH="$PROJECT_PATH"
+      touch "$SCAN_START_STAMP"
 
       if [[ ${#FILES[@]} -gt 0 ]]; then
         echo "Preparing scoped scan for selected files..."
@@ -559,9 +608,24 @@ for cmd in "${COMMANDS[@]}"; do
         upload_vex "$SCAN_PATH"
       fi
 
+      # The resolver container exits 0 even when its uploads failed (entrypoint.py
+      # discards the jar's exit code), so the only signal is the UPLOAD_FAILED line
+      # it writes to .glog/glog-scan.log. Only a log written by this run counts:
+      # glog.sh does not empty .glog/ first, so an older log must not trip it.
+      if [[ "$RESOLVER_UPLOAD" == "true" ]]; then
+        _rlog="$SCAN_PATH/.glog/glog-scan.log"
+        if [[ -f "$_rlog" && "$_rlog" -nt "$SCAN_START_STAMP" ]] && grep -q 'UPLOAD_FAILED' "$_rlog"; then
+          UPLOAD_FAILED=true
+          echo "ERROR: resolver upload failed: $(grep -m1 -oE 'UPLOAD_FAILED[^|]*(\| details=\[[^]]{0,200})?' "$_rlog")" >&2
+        fi
+      fi
 
        persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
        verify_scan_artifacts "$PROJECT_PATH"
+       if [[ "$UPLOAD_FAILED" == "true" && "$FAIL_ON_UPLOAD_ERROR" == "true" ]]; then
+         echo "Exiting 2 because --fail-on-upload-error is set (SARIF was still written to .glog/)." >&2
+         exit 2
+       fi
 
         if [[ "$REBUILD" == "true" ]]; then
            if [[ -z "$GLOG_API_URL" && -n "$CLIENT" ]]; then
