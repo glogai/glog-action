@@ -342,6 +342,11 @@ scan_lang() {
       EXTRA_ARGS+=(-v "$vdb_dir":/vdb -e VDB_HOME=/vdb -e VDB_AGE_HOURS="${VDB_AGE_HOURS:-168}")
     fi
 
+    # Host-side local-model switches (recall plan D0) are deliberately absent
+    # from this block: the model runs as a host pre-step inside gscan.sh,
+    # before any container, and never from inside one. Forwarding any
+    # GLOG_LOCAL_* knob here would hand a workflow variable to the container
+    # without that pre-step having resolved it.
     docker run --pull always --rm \
       "${EXTRA_ARGS[@]}" \
       -e GLOGSERVICE="${GLOG_TOKEN}" \
