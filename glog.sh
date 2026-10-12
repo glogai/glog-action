@@ -280,6 +280,16 @@ scan_lang() {
     return 0
   fi
 
+  # Local image override for one language, named GLOG_IMAGE_<LANG> with the
+  # language upper-cased and '-' folded to '_' (GLOG_IMAGE_RESOLVER=...). Same
+  # convention as gscan.sh, which documents how to build the overlay: cheaper
+  # than retagging a published image, which replaces what a plain scan runs.
+  local image_override_var="GLOG_IMAGE_$(printf '%s' "$lang" | tr '[:lower:]-' '[:upper:]_')"
+  local image_override="${!image_override_var:-}"
+  if [[ -n "$image_override" ]]; then
+    image_list="$image_override"
+  fi
+
   for image_name in $image_list; do
     if [[ -n "${GLOG_DEPSCAN_VDB_VOLUME:-}" ]]; then
       if ! docker volume inspect "${GLOG_DEPSCAN_VDB_VOLUME}" > /dev/null 2>&1; then
@@ -321,7 +331,25 @@ scan_lang() {
       EXTRA_ARGS+=(-e GLOG_VEX_REACHABILITY="${GLOG_VEX_REACHABILITY:-true}")
     fi
 
-    local run_image="${registry}${image_name}"
+    # Override the VEX builder baked into the oss image with a local copy: the
+    # VEX logic changes far more often than the image, so this avoids rebuilding
+    # and pushing a multi-GB scanner image for every change to vex_builder.py.
+    if [[ "$image_name" == glog-scan-oss-cc90* && -n "${GLOG_VEX_BUILDER:-}" ]]; then
+      [[ -f "$GLOG_VEX_BUILDER" ]] || { echo "ERROR: GLOG_VEX_BUILDER=$GLOG_VEX_BUILDER not found" >&2; exit 1; }
+      EXTRA_ARGS+=(-v "${GLOG_VEX_BUILDER}:/usr/local/glog/vex_builder.py:ro")
+    fi
+
+    # A local override is used verbatim: no registry prefix and no pull, because
+    # a local image is local. gscan.sh applies the same rule (see its
+    # image_override / resolve_image_ref), and a scan run through either script
+    # has to resolve the override to the same reference.
+    local run_image pull_args=()
+    if [[ -n "$image_override" ]]; then
+      run_image="$image_name"
+    else
+      run_image="${registry}${image_name}"
+      pull_args=(--pull always)
+    fi
 
     # Host-side depscan VDB cache (baked baseline + incremental refresh).
     # A named volume (GLOG_DEPSCAN_VDB_VOLUME) takes precedence.
@@ -347,7 +375,7 @@ scan_lang() {
     # before any container, and never from inside one. Forwarding any
     # GLOG_LOCAL_* knob here would hand a workflow variable to the container
     # without that pre-step having resolved it.
-    docker run --pull always --rm \
+    docker run "${pull_args[@]}" --rm \
       "${EXTRA_ARGS[@]}" \
       -e GLOGSERVICE="${GLOG_TOKEN}" \
       -e GLOG_TOKEN="${GLOG_TOKEN}" \
