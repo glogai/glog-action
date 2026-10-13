@@ -67,6 +67,18 @@ inputs:
     description: "Generate a CycloneDX VEX with OWASP depscan over the source code, using the SBOM of this run as input and reachability analysis (implies sbom=true). Uploaded to the Glog server with on-prem-upload=true, otherwise kept in .glog/vex.cdx.json. PREREQUISITE: install dependencies in the workspace before this step (npm ci, a venv inside the repo with requirements installed, mvn dependency:resolve / gradle dependencies, go mod download, dotnet restore); without them most vulnerabilities stay in_triage. Default is false."
     required: false
     default: "false"
+  cbom:
+    description: "Generate a CycloneDX CBOM (cryptographic inventory: algorithms, certificates, keys, protocols) from the source code and evaluate it against crypto rules (weak algorithms, PQC readiness, CNSA 2.0). Uploaded with on-prem-upload=true, otherwise kept in .glog/cbom.cdx.json. Default is false."
+    required: false
+    default: "false"
+  cbom-profile:
+    description: "CBOM rule profile: baseline, cnsa2 or pqc. Default baseline."
+    required: false
+    default: "baseline"
+  sbom-min-grade:
+    description: "Optional SBOM quality gate (A-F). The SBOM of this run is scored on the Glog server (nothing stored) and the job fails with exit code 3 when the grade is worse. Implies sbom=true. Empty = no gate."
+    required: false
+    default: ""
   vex-reachability:
     description: "Run depscan reachability analysis for the VEX (default true). When false every statement is in_triage."
     required: false
@@ -367,6 +379,13 @@ runs:
           ARGS+=("--vex")
         fi
         export GLOG_VEX_REACHABILITY="${{ inputs.vex-reachability }}"
+        if [ "${{ inputs.cbom }}" = "true" ]; then
+          ARGS+=("--cbom")
+        fi
+        export GLOG_CBOM_PROFILE="${{ inputs.cbom-profile }}"
+        if [ -n "${{ inputs.sbom-min-grade }}" ]; then
+          ARGS+=("--sbom-min-grade" "${{ inputs.sbom-min-grade }}")
+        fi
         if [ -n "${{ inputs.scl-uuid }}" ]; then
           ARGS+=("--scl-uuid" "${{ inputs.scl-uuid }}")
         fi

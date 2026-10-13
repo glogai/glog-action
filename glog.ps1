@@ -46,6 +46,7 @@ Options:
   --inventory               Force the inventory scanner to run (in addition to detected languages)
   --sbom                    Generate a CycloneDX SBOM via resolver (--with-sbom)
   --sbom-only               Skip SARIF, only produce the SBOM (implies --sbom)
+  --cbom                    Generate a CycloneDX CBOM (cryptographic inventory) and upload it.
   --vex                     Generate a VEX with depscan + reachability (implies --sbom).
                             Install dependencies first or most results stay in_triage.
   --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
@@ -381,6 +382,43 @@ $client = ''
 $environmentName = ''
 $registry = 'ghcr.io/glogai/'
 $projectPath = (Get-Location).Path
+function Invoke-GlogCbom {
+    param([string]$ScanPath, [string]$Registry)
+    $image = "${Registry}glog-scan-sbom-9828"
+    New-Item -ItemType Directory -Force -Path (Join-Path $ScanPath '.glog') | Out-Null
+    Write-Output 'Generating CBOM (cryptographic inventory)'
+    $script = 'rm -f /app/.glog/cbom.gen.json; cdxgen --include-crypto --spec-version 1.6 -o /app/.glog/cbom.gen.json /app || echo "WARNING: generator crypto pass failed; detector only."; python3 /usr/local/glog/cbom_detector.py --src /app --merge /app/.glog/cbom.gen.json --out /app/.glog/cbom.cdx.json; rm -f /app/.glog/cbom.gen.json'
+    & docker run --rm --pull always -v "${ScanPath}:/app" --entrypoint sh -e FETCH_LICENSE=false -e CDXGEN_TIMEOUT_MS=600000 $image -c $script
+    if ($LASTEXITCODE -ne 0) { Write-Output 'WARNING: CBOM generation failed; continuing.' }
+}
+
+function Send-GlogCbom {
+    param([string]$ScanPath, [string]$ResolverUpload, [string]$PrivacyTier, [string]$ApiUrl,
+          [string]$Client, [string]$EnvironmentName, [string]$GlogToken, [string]$SclUuid)
+    $cbomFile = Join-Path -Path $ScanPath -ChildPath '.glog/cbom.cdx.json'
+    if (-not (Test-Path -LiteralPath $cbomFile)) { Write-Output "WARNING: CBOM requested but $cbomFile was not produced."; return }
+    if ($ResolverUpload -ne 'true' -or $PrivacyTier -eq 'none') { Write-Output "CBOM kept locally: $cbomFile"; return }
+    $api = $ApiUrl
+    if (-not $api -and $Client) {
+        $api = if ($EnvironmentName -match '^(dev|development)$') { "https://$Client.dev.glog.ai" } else { "https://$Client.glog.ai" }
+    }
+    if (-not $api -or -not $GlogToken) { Write-Output 'WARNING: CBOM not uploaded (API URL / token missing).'; return }
+    $serial = ''
+    $sbomFile = Join-Path -Path $ScanPath -ChildPath '.glog/sbom.cdx.json'
+    if (Test-Path -LiteralPath $sbomFile) {
+        try { $serial = (Get-Content -LiteralPath $sbomFile -Raw | ConvertFrom-Json).serialNumber } catch { $serial = '' }
+    }
+    $profile = if ($env:GLOG_CBOM_PROFILE) { $env:GLOG_CBOM_PROFILE } else { 'baseline' }
+    try {
+        $out = & curl.exe -sS -X POST -H "Authorization: Token $GlogToken" `
+            -F "cbom_file=@$cbomFile;type=application/json" -F "sbom_serial=$serial" -F "scl_uuid=$SclUuid" -F "profile=$profile" `
+            "$($api.TrimEnd('/'))/api/sca/resolver/cbom/"
+        Write-Output "CBOM upload response: $out"
+    } catch {
+        Write-Output "WARNING: CBOM upload failed: $_"
+    }
+}
+
 function Send-GlogVex {
     param([string]$ScanPath, [string]$ResolverUpload, [string]$PrivacyTier, [string]$ApiUrl,
           [string]$Client, [string]$EnvironmentName, [string]$GlogToken, [string]$SclUuid)
@@ -415,6 +453,7 @@ $tempScanDir = $null
 $withSbom = 'false'
 $sbomOnly = 'false'
 $withVex = 'false'
+$withCbom = 'false'
 $sclUuid = ''
 $forceInventory = $false
 $privacyTier = if ($env:PRIVACY_TIER) { $env:PRIVACY_TIER } else { 'full' }
@@ -517,6 +556,11 @@ while ($index -lt $scriptArgs.Count) {
         }
         '--sbom' {
             $withSbom = 'true'
+            $index++
+            continue
+        }
+        '--cbom' {
+            $withCbom = 'true'
             $index++
             continue
         }
@@ -644,6 +688,10 @@ try {
 
                 if ($withVex -eq 'true') {
                     Send-GlogVex -ScanPath $scanPath -ResolverUpload $resolverUpload -PrivacyTier $privacyTier -ApiUrl $apiUrl -Client $client -EnvironmentName $environmentName -GlogToken $glogToken -SclUuid $sclUuid
+                }
+                if ($withCbom -eq 'true') {
+                    Invoke-GlogCbom -ScanPath $scanPath -Registry $registry
+                    Send-GlogCbom -ScanPath $scanPath -ResolverUpload $resolverUpload -PrivacyTier $privacyTier -ApiUrl $apiUrl -Client $client -EnvironmentName $environmentName -GlogToken $glogToken -SclUuid $sclUuid
                 }
 
                 Persist-ScopedScanArtifacts -ScanPath $scanPath -ProjectPath $projectPath

@@ -56,16 +56,137 @@ upload_vex() {
     sbom_serial=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("serialNumber",""))' "$1/.glog/sbom.cdx.json" 2>/dev/null || true)
   fi
   local code
+  rm -f /tmp/glog-vex-upload.json
   code=$(curl -sS -o /tmp/glog-vex-upload.json -w '%{http_code}' -X POST \
     -H "Authorization: Token ${GLOG_TOKEN}" \
     -F "vex_file=@${vex_file};type=application/json" \
     -F "sbom_serial=${sbom_serial}" \
     -F "scl_uuid=${SCL_UUID:-}" \
-    "${api%/}/api/sca/resolver/vex/" || echo 000)
+    "${api%/}/api/sca/resolver/vex/" || true)
+  code="${code:-000}"
   if [[ "$code" == "201" ]]; then
     echo "VEX uploaded: $(cat /tmp/glog-vex-upload.json)"
   else
     echo "WARNING: VEX upload failed (HTTP $code): $(head -c 300 /tmp/glog-vex-upload.json 2>/dev/null)"
+  fi
+}
+
+# CBOM: cdxgen in crypto mode (inside the SBOM image) writes
+# /app/.glog/cbom.cdx.json, then it is uploaded to /api/sca/resolver/cbom/.
+# Best results need buildable source; for Java a prior build helps cdxgen
+# resolve crypto API usage.
+run_cbom() {
+  local path="$1" registry="$2"
+  local image="${registry}glog-scan-sbom-9828"
+  mkdir -p "$path/.glog"
+  echo "Generating CBOM (cryptographic inventory)"
+  # 1) generator in crypto mode (strongest for Java), 2) our source detector
+  # merges certificates, keys, protocols and crypto API usage for all languages.
+  if ! docker run --rm --pull always -v "$path:/app" --entrypoint sh \
+      -e FETCH_LICENSE=false -e CDXGEN_TIMEOUT_MS=600000 "$image" -c '
+        rm -f /app/.glog/cbom.gen.json
+        cdxgen --include-crypto --spec-version 1.6 -o /app/.glog/cbom.gen.json /app \
+          || echo "WARNING: generator crypto pass failed; detector only."
+        python3 /usr/local/glog/cbom_detector.py --src /app \
+          --merge /app/.glog/cbom.gen.json --out /app/.glog/cbom.cdx.json
+        rm -f /app/.glog/cbom.gen.json'; then
+    echo "WARNING: CBOM generation failed; continuing."
+  fi
+}
+
+upload_cbom() {
+  local cbom_file="$1/.glog/cbom.cdx.json"
+  if [[ ! -s "$cbom_file" ]]; then
+    echo "WARNING: CBOM requested but $cbom_file was not produced."
+    return 0
+  fi
+  if [[ "$RESOLVER_UPLOAD" != "true" || "$PRIVACY_TIER" == "none" ]]; then
+    echo "CBOM kept locally: $cbom_file"
+    return 0
+  fi
+  local api="${GLOG_API_URL:-}"
+  if [[ -z "$api" && -n "$CLIENT" ]]; then
+    case "${ENV,,}" in
+      dev|development) api="https://${CLIENT}.dev.glog.ai" ;;
+      *) api="https://${CLIENT}.glog.ai" ;;
+    esac
+  fi
+  if [[ -z "$api" || -z "${GLOG_TOKEN:-}" ]]; then
+    echo "WARNING: CBOM not uploaded (GLOG_API_URL / GLOG_TOKEN missing)."
+    return 0
+  fi
+  local sbom_serial=""
+  if [[ -s "$1/.glog/sbom.cdx.json" ]]; then
+    sbom_serial=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("serialNumber",""))' "$1/.glog/sbom.cdx.json" 2>/dev/null || true)
+  fi
+  local code
+  rm -f /tmp/glog-cbom-upload.json
+  code=$(curl -sS -o /tmp/glog-cbom-upload.json -w '%{http_code}' -X POST \
+    -H "Authorization: Token ${GLOG_TOKEN}" \
+    -F "cbom_file=@${cbom_file};type=application/json" \
+    -F "sbom_serial=${sbom_serial}" \
+    -F "scl_uuid=${SCL_UUID:-}" \
+    -F "profile=${GLOG_CBOM_PROFILE:-baseline}" \
+    "${api%/}/api/sca/resolver/cbom/" || true)
+  code="${code:-000}"
+  if [[ "$code" == "201" ]]; then
+    echo "CBOM uploaded: $(cat /tmp/glog-cbom-upload.json)"
+  else
+    echo "WARNING: CBOM upload failed (HTTP $code): $(head -c 300 /tmp/glog-cbom-upload.json 2>/dev/null)"
+  fi
+}
+
+sbom_quality_gate() {
+  # Optional CI gate: score the SBOM on the Glog server (nothing is stored)
+  # and fail the run when the grade is below GLOG_SBOM_MIN_GRADE (A-F).
+  local min="${GLOG_SBOM_MIN_GRADE:-}"
+  [[ -z "$min" ]] && return 0
+  local sbom_file="$1/.glog/sbom.cdx.json"
+  if [[ ! -s "$sbom_file" ]]; then
+    echo "WARNING: sbom-min-grade=$min set but $sbom_file was not produced; gate skipped."
+    return 0
+  fi
+  local api="${GLOG_API_URL:-}"
+  if [[ -z "$api" && -n "$CLIENT" ]]; then
+    case "${ENV,,}" in
+      dev|development) api="https://${CLIENT}.dev.glog.ai" ;;
+      *) api="https://${CLIENT}.glog.ai" ;;
+    esac
+  fi
+  if [[ -z "$api" || -z "${GLOG_TOKEN:-}" ]]; then
+    echo "WARNING: SBOM quality gate skipped (GLOG_API_URL / GLOG_TOKEN missing)."
+    return 0
+  fi
+  local code
+  rm -f /tmp/glog-sbom-quality.json
+  code=$(curl -sS -o /tmp/glog-sbom-quality.json -w '%{http_code}' -X POST \
+    -H "Authorization: Token ${GLOG_TOKEN}" \
+    -F "sbom_file=@${sbom_file};type=application/json" \
+    -F "min_grade=${min}" \
+    "${api%/}/api/sca/resolver/sbom-quality/" || true)
+  code="${code:-000}"
+  if [[ "$code" != "200" ]]; then
+    echo "WARNING: SBOM quality gate could not run (HTTP $code): $(head -c 300 /tmp/glog-sbom-quality.json 2>/dev/null)"
+    return 0
+  fi
+  local summary
+  summary=$(python3 - /tmp/glog-sbom-quality.json <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+print(r.get("gate", "pass"), r.get("grade", "?"), r.get("score", "?"))
+for c in r.get("categories", []):
+    if c.get("applicable"):
+        print(f"  {c['label']}: {c['score']} - {c['detail']}", file=sys.stderr)
+for c in r.get("caps", []):
+    print(f"  cap {c['max_grade']}: {c['reason']}", file=sys.stderr)
+PY
+)
+  local gate grade score
+  read -r gate grade score <<<"$summary"
+  echo "SBOM quality: grade $grade (score $score), required $min or better."
+  if [[ "$gate" == "fail" ]]; then
+    echo "ERROR: SBOM quality grade $grade is below sbom-min-grade=$min." >&2
+    SBOM_GATE_FAILED=true
   fi
 }
 
@@ -90,6 +211,8 @@ Options:
   --inventory               Force the inventory scanner to run (in addition to detected languages)
   --sbom                    Generate a CycloneDX SBOM via resolver (--with-sbom)
   --sbom-only               Skip SARIF, only produce the SBOM (implies --sbom)
+  --cbom                    Generate a CycloneDX CBOM (cryptographic inventory) and upload it.
+  --sbom-min-grade <A-F>    Fail (exit 3) when the SBOM quality grade is worse than this (implies --sbom).
   --vex                     Generate a VEX with depscan + reachability (implies --sbom).
                             Install dependencies first (npm ci, venv in the repo, mvn
                             dependency:resolve, ...) or most results stay in_triage.
@@ -445,6 +568,8 @@ TEMP_SCAN_DIR=""
 RESOLVER_UPLOAD=false
 WITH_SBOM=false
 WITH_VEX=false
+WITH_CBOM=false
+SBOM_GATE_FAILED=false
 SBOM_ONLY=false
 SCL_UUID=""
 FORCE_INVENTORY=false
@@ -499,6 +624,8 @@ while [[ $# -gt 0 ]]; do
      -u|--upload) RESOLVER_UPLOAD=true; shift ;;
     --inventory) FORCE_INVENTORY=true; shift ;;
     --sbom) WITH_SBOM=true; shift ;;
+    --cbom) WITH_CBOM=true; shift ;;
+    --sbom-min-grade) GLOG_SBOM_MIN_GRADE="$2"; WITH_SBOM=true; shift 2 ;;
     --vex) WITH_VEX=true; WITH_SBOM=true; shift ;;
     --sbom-only) SBOM_ONLY=true; WITH_SBOM=true; shift ;;
     --scl-uuid) SCL_UUID="$2"; shift 2 ;;
@@ -641,6 +768,13 @@ for cmd in "${COMMANDS[@]}"; do
       if [[ "$WITH_VEX" == "true" ]]; then
         upload_vex "$SCAN_PATH"
       fi
+      if [[ "$WITH_CBOM" == "true" ]]; then
+        run_cbom "$SCAN_PATH" "$REGISTRY"
+        upload_cbom "$SCAN_PATH"
+      fi
+      if [[ "$WITH_SBOM" == "true" ]]; then
+        sbom_quality_gate "$SCAN_PATH"
+      fi
 
       # The resolver container exits 0 even when its uploads failed (entrypoint.py
       # discards the jar's exit code), so the only signal is the UPLOAD_FAILED line
@@ -656,6 +790,10 @@ for cmd in "${COMMANDS[@]}"; do
 
        persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
        verify_scan_artifacts "$PROJECT_PATH"
+       if [[ "$SBOM_GATE_FAILED" == "true" ]]; then
+         echo "Exiting 3 because the SBOM quality gate failed (artifacts were still written to .glog/)." >&2
+         exit 3
+       fi
        if [[ "$UPLOAD_FAILED" == "true" && "$FAIL_ON_UPLOAD_ERROR" == "true" ]]; then
          echo "Exiting 2 because --fail-on-upload-error is set (SARIF was still written to .glog/)." >&2
          exit 2
