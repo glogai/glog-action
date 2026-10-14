@@ -344,107 +344,144 @@ runs:
 
     - name: Glog Scan
       run: |
-        TOOL_CMD="${{ github.action_path }}/glog.sh scan --path $GITHUB_WORKSPACE/${{ inputs.path }} --registry ghcr.io/glogai/" 
+        CMD=("${{ github.action_path }}/glog.sh" scan --path "$GITHUB_WORKSPACE/$INPUT_PATH" --registry ghcr.io/glogai/)
         ARGS=()
-        if [ ! -z "${{ inputs.lang }}" ]; then
-          ARGS+=("--lang" "${{ inputs.lang }}")
+        if [ -n "$INPUT_LANG" ]; then
+          ARGS+=("--lang" "$INPUT_LANG")
         fi
-        if [ ! -z "${{ inputs.ignore }}" ]; then
-          ARGS+=("--ignore" "$(printf '%q' "${{ inputs.ignore }}")")
+        if [ -n "$INPUT_IGNORE" ]; then
+          ARGS+=("--ignore" "$INPUT_IGNORE")
         fi
-        if [ ! -z "${{ inputs.client }}" ]; then
-          ARGS+=("--client" "$(printf '%q' "${{ inputs.client }}")")
+        if [ -n "$INPUT_CLIENT" ]; then
+          ARGS+=("--client" "$INPUT_CLIENT")
         fi
-        if [ ! -z "${{ inputs.env }}" ]; then
-          ARGS+=("--env" "$(printf '%q' "${{ inputs.env }}")")
+        if [ -n "$INPUT_ENV" ]; then
+          ARGS+=("--env" "$INPUT_ENV")
         fi
-        if [ -n "${{ inputs.files }}" ]; then
-          ARGS+=("--files" "${{ inputs.files }}")
+        if [ -n "$INPUT_FILES" ]; then
+          ARGS+=("--files" "$INPUT_FILES")
         fi
-        if [ "${{ inputs.on-prem-upload }}" = "true" ]; then
+        if [ "$INPUT_ON_PREM_UPLOAD" = "true" ]; then
           ARGS+=("--upload")
         fi
         # Uploading to the dashboard requires an inventory binding, otherwise the
         # resolver resolves no component and silently skips the inventory upload.
-        if [ "${{ inputs.inventory }}" = "true" ] || [ "${{ inputs.on-prem-upload }}" = "true" ]; then
+        if [ "$INPUT_INVENTORY" = "true" ] || [ "$INPUT_ON_PREM_UPLOAD" = "true" ]; then
           ARGS+=("--inventory")
         fi
-        if [ "${{ inputs.sbom }}" = "true" ] || [ "${{ inputs.sbom-only }}" = "true" ]; then
+        if [ "$INPUT_SBOM" = "true" ] || [ "$INPUT_SBOM_ONLY" = "true" ]; then
           ARGS+=("--sbom")
         fi
-        if [ "${{ inputs.sbom-only }}" = "true" ]; then
+        if [ "$INPUT_SBOM_ONLY" = "true" ]; then
           ARGS+=("--sbom-only")
         fi
-        if [ "${{ inputs.vex }}" = "true" ]; then
+        if [ "$INPUT_VEX" = "true" ]; then
           ARGS+=("--vex")
         fi
-        export GLOG_VEX_REACHABILITY="${{ inputs.vex-reachability }}"
-        if [ "${{ inputs.cbom }}" = "true" ]; then
+        export GLOG_VEX_REACHABILITY="$INPUT_VEX_REACHABILITY"
+        if [ "$INPUT_CBOM" = "true" ]; then
           ARGS+=("--cbom")
         fi
-        export GLOG_CBOM_PROFILE="${{ inputs.cbom-profile }}"
-        if [ -n "${{ inputs.sbom-min-grade }}" ]; then
-          ARGS+=("--sbom-min-grade" "${{ inputs.sbom-min-grade }}")
+        export GLOG_CBOM_PROFILE="$INPUT_CBOM_PROFILE"
+        if [ -n "$INPUT_SBOM_MIN_GRADE" ]; then
+          ARGS+=("--sbom-min-grade" "$INPUT_SBOM_MIN_GRADE")
         fi
-        if [ -n "${{ inputs.scl-uuid }}" ]; then
-          ARGS+=("--scl-uuid" "${{ inputs.scl-uuid }}")
+        if [ -n "$INPUT_SCL_UUID" ]; then
+          ARGS+=("--scl-uuid" "$INPUT_SCL_UUID")
         fi
-        if [ -n "${{ inputs.privacy-tier }}" ]; then
-          ARGS+=("--privacy-tier" "${{ inputs.privacy-tier }}")
+        if [ -n "$INPUT_PRIVACY_TIER" ]; then
+          ARGS+=("--privacy-tier" "$INPUT_PRIVACY_TIER")
         fi
-        if [ "${{ inputs.mock-resolver }}" = "true" ]; then
+        if [ "$INPUT_MOCK_RESOLVER" = "true" ]; then
           ARGS+=("--mock-resolver")
         fi
-        if [ -n "${{ inputs.api-url }}" ]; then
-          ARGS+=("--api-url" "${{ inputs.api-url }}")
+        if [ -n "$INPUT_API_URL" ]; then
+          ARGS+=("--api-url" "$INPUT_API_URL")
         fi
-        if [ -n "${{ inputs.sarif-format-type }}" ]; then
-          ARGS+=("--sarif-format-type" "${{ inputs.sarif-format-type }}")
+        if [ -n "$INPUT_SARIF_FORMAT_TYPE" ]; then
+          ARGS+=("--sarif-format-type" "$INPUT_SARIF_FORMAT_TYPE")
         fi
-        if [ -n "${{ inputs.server-sarif-format-type }}" ]; then
-          ARGS+=("--server-sarif-format-type" "${{ inputs.server-sarif-format-type }}")
+        if [ -n "$INPUT_SERVER_SARIF_FORMAT_TYPE" ]; then
+          ARGS+=("--server-sarif-format-type" "$INPUT_SERVER_SARIF_FORMAT_TYPE")
         fi
-        if [ "${{ inputs.supply-chain }}" = "true" ]; then
+        if [ "$INPUT_SUPPLY_CHAIN" = "true" ]; then
           ARGS+=("--supply-chain")
         fi
-        if [ -n "${{ inputs.supply-chain-policy }}" ]; then
-          ARGS+=("--supply-chain-policy" "${{ inputs.supply-chain-policy }}")
+        if [ -n "$INPUT_SUPPLY_CHAIN_POLICY" ]; then
+          ARGS+=("--supply-chain-policy" "$INPUT_SUPPLY_CHAIN_POLICY")
         fi
-        if [ "${{ inputs.supply-chain-offline }}" = "true" ]; then
+        if [ "$INPUT_SUPPLY_CHAIN_OFFLINE" = "true" ]; then
           ARGS+=("--supply-chain-offline")
         fi
-        if [ "${{ inputs.supply-chain-cache-only }}" = "true" ]; then
+        if [ "$INPUT_SUPPLY_CHAIN_CACHE_ONLY" = "true" ]; then
           ARGS+=("--supply-chain-cache-only")
         fi
-        if [ -n "${{ inputs.supply-chain-fail-on }}" ]; then
-          ARGS+=("--supply-chain-fail-on" "${{ inputs.supply-chain-fail-on }}")
+        if [ -n "$INPUT_SUPPLY_CHAIN_FAIL_ON" ]; then
+          ARGS+=("--supply-chain-fail-on" "$INPUT_SUPPLY_CHAIN_FAIL_ON")
         fi
-        if [ -n "${{ inputs.supply-chain-format }}" ]; then
-          ARGS+=("--supply-chain-format" "${{ inputs.supply-chain-format }}")
+        if [ -n "$INPUT_SUPPLY_CHAIN_FORMAT" ]; then
+          ARGS+=("--supply-chain-format" "$INPUT_SUPPLY_CHAIN_FORMAT")
         fi
-        if [ "${{ inputs.rebuild }}" = "true" ]; then
+        if [ "$INPUT_REBUILD" = "true" ]; then
           ARGS+=("--rebuild"
-            "--rebuild-artifact" "${{ inputs.rebuild-artifact }}"
-            "--rebuild-package" "${{ inputs.rebuild-package }}"
-            "--rebuild-version" "${{ inputs.rebuild-version }}"
-            "--rebuild-ecosystem" "${{ inputs.rebuild-ecosystem }}"
-            "--rebuild-image" "${{ inputs.rebuild-image }}")
-          if [ -n "${{ inputs.rebuild-max-packages }}" ]; then
-            ARGS+=("--max-packages" "${{ inputs.rebuild-max-packages }}")
+            "--rebuild-artifact" "$INPUT_REBUILD_ARTIFACT"
+            "--rebuild-package" "$INPUT_REBUILD_PACKAGE"
+            "--rebuild-version" "$INPUT_REBUILD_VERSION"
+            "--rebuild-ecosystem" "$INPUT_REBUILD_ECOSYSTEM"
+            "--rebuild-image" "$INPUT_REBUILD_IMAGE")
+          if [ -n "$INPUT_REBUILD_MAX_PACKAGES" ]; then
+            ARGS+=("--max-packages" "$INPUT_REBUILD_MAX_PACKAGES")
           fi
-          if [ -n "${{ inputs.rebuild-manifest }}" ]; then
-            ARGS+=("--rebuild-manifest" "${{ inputs.rebuild-manifest }}")
+          if [ -n "$INPUT_REBUILD_MANIFEST" ]; then
+            ARGS+=("--rebuild-manifest" "$INPUT_REBUILD_MANIFEST")
           fi
         fi
 
-        $TOOL_CMD "${ARGS[@]}"
-      shell: bash
+        "${CMD[@]}" "${ARGS[@]}"
       env:
         GLOG_VDB_CACHE: ${{ inputs.vdb-cache }}
         VDB_AGE_HOURS: ${{ inputs.vdb-age-hours }}
         GLOG_TOKEN: ${{ inputs.glog-token }}
         GLOG_COMPONENT: ${{ github.event.repository.name }}
         GLOG_BRANCH: ${{ github.head_ref != '' && github.head_ref || github.ref_name }}
+        # Action inputs are read through the environment so GitHub expression
+        # expansion stays out of the shell; globs, spaces and metacharacters in
+        # the values reach glog.sh verbatim.
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_LANG: ${{ inputs.lang }}
+        INPUT_IGNORE: ${{ inputs.ignore }}
+        INPUT_CLIENT: ${{ inputs.client }}
+        INPUT_ENV: ${{ inputs.env }}
+        INPUT_FILES: ${{ inputs.files }}
+        INPUT_ON_PREM_UPLOAD: ${{ inputs.on-prem-upload }}
+        INPUT_INVENTORY: ${{ inputs.inventory }}
+        INPUT_SBOM: ${{ inputs.sbom }}
+        INPUT_SBOM_ONLY: ${{ inputs.sbom-only }}
+        INPUT_VEX: ${{ inputs.vex }}
+        INPUT_VEX_REACHABILITY: ${{ inputs.vex-reachability }}
+        INPUT_CBOM: ${{ inputs.cbom }}
+        INPUT_CBOM_PROFILE: ${{ inputs.cbom-profile }}
+        INPUT_SBOM_MIN_GRADE: ${{ inputs.sbom-min-grade }}
+        INPUT_SCL_UUID: ${{ inputs.scl-uuid }}
+        INPUT_PRIVACY_TIER: ${{ inputs.privacy-tier }}
+        INPUT_MOCK_RESOLVER: ${{ inputs.mock-resolver }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+        INPUT_SARIF_FORMAT_TYPE: ${{ inputs.sarif-format-type }}
+        INPUT_SERVER_SARIF_FORMAT_TYPE: ${{ inputs.server-sarif-format-type }}
+        INPUT_SUPPLY_CHAIN: ${{ inputs.supply-chain }}
+        INPUT_SUPPLY_CHAIN_POLICY: ${{ inputs.supply-chain-policy }}
+        INPUT_SUPPLY_CHAIN_OFFLINE: ${{ inputs.supply-chain-offline }}
+        INPUT_SUPPLY_CHAIN_CACHE_ONLY: ${{ inputs.supply-chain-cache-only }}
+        INPUT_SUPPLY_CHAIN_FAIL_ON: ${{ inputs.supply-chain-fail-on }}
+        INPUT_SUPPLY_CHAIN_FORMAT: ${{ inputs.supply-chain-format }}
+        INPUT_REBUILD: ${{ inputs.rebuild }}
+        INPUT_REBUILD_ARTIFACT: ${{ inputs.rebuild-artifact }}
+        INPUT_REBUILD_PACKAGE: ${{ inputs.rebuild-package }}
+        INPUT_REBUILD_VERSION: ${{ inputs.rebuild-version }}
+        INPUT_REBUILD_ECOSYSTEM: ${{ inputs.rebuild-ecosystem }}
+        INPUT_REBUILD_IMAGE: ${{ inputs.rebuild-image }}
+        INPUT_REBUILD_MAX_PACKAGES: ${{ inputs.rebuild-max-packages }}
+        INPUT_REBUILD_MANIFEST: ${{ inputs.rebuild-manifest }}
         # Bulk remediation / profiling knobs. Empty values fall back to the
         # defaults inside glog.sh (bulk on, batch 20, linger 750ms, 8 in flight).
         GLOG_PROFILE: ${{ env.GLOG_PROFILE }}
@@ -466,7 +503,7 @@ runs:
     - name: Glog artifact summary
       if: always()
       run: |
-        GLOG_DIR="$GITHUB_WORKSPACE/${{ inputs.path }}/.glog"
+        GLOG_DIR="$GITHUB_WORKSPACE/$INPUT_PATH/.glog"
         {
           echo "### Glog scan artifacts"
           echo ""
@@ -477,38 +514,50 @@ runs:
           fi
           if ls "$GLOG_DIR"/*.cdx.json >/dev/null 2>&1; then
             echo "- SBOM: \`$(basename $(ls "$GLOG_DIR"/*.cdx.json | head -n1))\` present"
-          elif [ "${{ inputs.sbom }}" = "true" ] || [ "${{ inputs.sbom-only }}" = "true" ]; then
+          elif [ "$INPUT_SBOM" = "true" ] || [ "$INPUT_SBOM_ONLY" = "true" ]; then
             echo "- SBOM: **missing**"
           else
             echo "- SBOM: not requested"
           fi
           if ls "$GLOG_DIR"/vex.cdx.json >/dev/null 2>&1; then
             echo "- VEX: \`vex.cdx.json\` present (depscan + reachability; accuracy depends on installed dependencies)"
-          elif [ "${{ inputs.vex }}" = "true" ]; then
+          elif [ "$INPUT_VEX" = "true" ]; then
             echo "- VEX: **missing**"
           fi
-          echo "- Server upload: ${{ inputs.on-prem-upload }}"
+          echo "- Server upload: $INPUT_ON_PREM_UPLOAD"
         } >> "$GITHUB_STEP_SUMMARY"
       shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_SBOM: ${{ inputs.sbom }}
+        INPUT_SBOM_ONLY: ${{ inputs.sbom-only }}
+        INPUT_VEX: ${{ inputs.vex }}
+        INPUT_ON_PREM_UPLOAD: ${{ inputs.on-prem-upload }}
 
     - name: Git Add report
       run: |
-        git config --global user.name ${{ github.actor }} 
-        git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-        SARIF_PATH="$GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.sarif"
+        git config --global user.name "$GLOG_ACTOR"
+        git config --global user.email "$GLOG_ACTOR_ID+$GLOG_ACTOR@users.noreply.github.com"
+        SARIF_PATH="$GITHUB_WORKSPACE/$INPUT_PATH/.glog/glog-scan.sarif"
         if [ -f "$SARIF_PATH" ]; then
           git add -f "$SARIF_PATH"
         else
           echo "No SARIF report found at $SARIF_PATH, skipping."
         fi
       shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        GLOG_ACTOR: ${{ github.actor }}
+        GLOG_ACTOR_ID: ${{ github.actor_id }}
 
     - name: Git Add debug log
       if: ${{ inputs.debug == 'true' }}
       run: |
-        LOG_PATH="$GITHUB_WORKSPACE/${{ inputs.path }}/.glog/glog-scan.log"
+        LOG_PATH="$GITHUB_WORKSPACE/$INPUT_PATH/.glog/glog-scan.log"
         [ -f "$LOG_PATH" ] && git add -f "$LOG_PATH" || echo "No debug log found, skipping."
       shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
 
     - name: Check for staged file changes
       id: check_staged_changes
