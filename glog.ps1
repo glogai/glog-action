@@ -288,7 +288,9 @@ function Invoke-ScanLang {
                 $extraArgs += @('--network', 'host')
                 $extraArgs += @('-v', "${m2Dir}:/root/.m2")
                 $extraArgs += @('-e', 'CDXGEN_TIMEOUT_MS=600000')
-                $extraArgs += @('-e', 'FETCH_LICENSE=false')
+                # No FETCH_LICENSE override: the image enables license resolution
+                # (Dockerfile.cdxgen) and turning it off leaves every component of
+                # the report without a license.
             }
 
             $dockerArgs = @(

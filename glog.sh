@@ -446,7 +446,9 @@ scan_lang() {
       mkdir -p "${HOME}/.glog-m2"
       EXTRA_ARGS+=(-v "${HOME}/.glog-m2:/root/.m2")
       EXTRA_ARGS+=(-e CDXGEN_TIMEOUT_MS=600000)
-      EXTRA_ARGS+=(-e FETCH_LICENSE=false)
+      # No FETCH_LICENSE override: the image enables license resolution
+      # (Dockerfile.cdxgen) and turning it off leaves every component of the
+      # report without a license.
     fi
 
     if [[ "$lang" == "vex" ]]; then
