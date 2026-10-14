@@ -82,8 +82,11 @@ run_cbom() {
   echo "Generating CBOM (cryptographic inventory)"
   # 1) generator in crypto mode (strongest for Java), 2) our source detector
   # merges certificates, keys, protocols and crypto API usage for all languages.
+  # No FETCH_LICENSE override: the image enables license resolution
+  # (Dockerfile.cdxgen) and turning it off leaves every CBOM component without
+  # a license, the same fault the SBOM pass was fixed for.
   if ! docker run --rm --pull always -v "$path:/app" --entrypoint sh \
-      -e FETCH_LICENSE=false -e CDXGEN_TIMEOUT_MS=600000 "$image" -c '
+      -e CDXGEN_TIMEOUT_MS=600000 "$image" -c '
         rm -f /app/.glog/cbom.gen.json
         cdxgen --include-crypto --spec-version 1.6 -o /app/.glog/cbom.gen.json /app \
           || echo "WARNING: generator crypto pass failed; detector only."

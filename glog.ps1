@@ -390,7 +390,10 @@ function Invoke-GlogCbom {
     New-Item -ItemType Directory -Force -Path (Join-Path $ScanPath '.glog') | Out-Null
     Write-Output 'Generating CBOM (cryptographic inventory)'
     $script = 'rm -f /app/.glog/cbom.gen.json; cdxgen --include-crypto --spec-version 1.6 -o /app/.glog/cbom.gen.json /app || echo "WARNING: generator crypto pass failed; detector only."; python3 /usr/local/glog/cbom_detector.py --src /app --merge /app/.glog/cbom.gen.json --out /app/.glog/cbom.cdx.json; rm -f /app/.glog/cbom.gen.json'
-    & docker run --rm --pull always -v "${ScanPath}:/app" --entrypoint sh -e FETCH_LICENSE=false -e CDXGEN_TIMEOUT_MS=600000 $image -c $script
+    # No FETCH_LICENSE override: the image enables license resolution
+    # (Dockerfile.cdxgen) and turning it off leaves every CBOM component without
+    # a license, the same fault the SBOM pass was fixed for.
+    & docker run --rm --pull always -v "${ScanPath}:/app" --entrypoint sh -e CDXGEN_TIMEOUT_MS=600000 $image -c $script
     if ($LASTEXITCODE -ne 0) { Write-Output 'WARNING: CBOM generation failed; continuing.' }
 }
 
