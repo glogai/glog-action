@@ -4,27 +4,71 @@ $ErrorActionPreference = 'Stop'
 
 $defaultLangs = @('cpp', 'java', 'javascript', 'python', 'kotlin', 'php', 'ruby', 'csharp', 'oss', 'terraform', 'secrets', 'resolver', 'objectscript', 'go')
 
+# Image tags are derived, not authored. glog-tools/gbuild.sh names an image
+# glog-scan-<lang>-<first 4 hex of md5("<lang>-<tool>" + SALT)> and writes the
+# whole table to images.env, checked in beside this script and regenerated with
+# `./gbuild.sh --env` in glog-tools. glog-tools' test_images_env suite fails if
+# this copy drifts from the generator.
+#
+# The tags used to be written out here, in glog.sh and in glog-tools' gscan.sh.
+# Three hand-kept copies of a derived value drift, and they did: after the C/C++
+# opengrep stage shipped, this script and glog.sh still named devskim's tag
+# alone, so a scan of a C/C++ repo quietly skipped the stage the other drivers
+# ran.
+$imagesEnvPath = Join-Path $PSScriptRoot 'images.env'
+if (-not (Test-Path -LiteralPath $imagesEnvPath)) {
+    Write-Error ("images.env is missing from {0}, so no image tag can be resolved. " +
+                 "It ships with this action; regenerate it from glog-tools with " +
+                 "'./gbuild.sh --env' if the checkout is incomplete." -f $PSScriptRoot)
+    exit 2
+}
+
+# Flat KEY=VALUE, no quoting or expansion, so the parse is a split on the first
+# '=' - the same file glog.sh sources.
+$scanImage = @{}
+foreach ($line in Get-Content -LiteralPath $imagesEnvPath) {
+    $trimmed = $line.Trim()
+    if ($trimmed -eq '' -or $trimmed.StartsWith('#')) { continue }
+    $eq = $trimmed.IndexOf('=')
+    if ($eq -lt 1) { continue }
+    $scanImage[$trimmed.Substring(0, $eq)] = $trimmed.Substring($eq + 1)
+}
+
+# A missing key means this script and images.env disagree about which stages
+# exist, which is the drift the generated file is here to prevent - so fail
+# loudly rather than expanding to an empty tag and pulling "ghcr.io/glogai/".
+function Get-ScanImage([string]$key) {
+    if (-not $scanImage.ContainsKey($key)) {
+        throw "images.env has no entry '$key'; regenerate it from glog-tools with './gbuild.sh --env'."
+    }
+    return $scanImage[$key]
+}
+
+# Which stage runs for which language stays this driver's own decision - several
+# languages have more than one engine built for them, and a few of those are not
+# run here (gosec, phpstan, clair, and devskim for csharp and javascript). The
+# tags, though, all come from images.env. Order matters and is preserved.
 $imageMap = @{
-    oss          = @('glog-scan-oss-cc90')
-    java         = @('glog-scan-java-b608', 'glog-scan-java-3e9a', 'glog-scan-java-e2b1')
-    ruby         = @('glog-scan-ruby-35d9')
-    terraform    = @('glog-scan-terraform-51c8', 'glog-scan-terraform-6b93', 'glog-scan-terraform-8bd5')
-    cpp          = @('glog-scan-cpp-c97a')
-    python       = @('glog-scan-python-5f95', 'glog-scan-python-0386', 'glog-scan-python-4166')
-    secrets      = @('glog-scan-secrets-f27b')
-    reachability = @('glog-scan-reachability-f820')
-    csharp       = @('glog-scan-csharp-b460', 'glog-scan-csharp-6c24')
-    php          = @('glog-scan-php-7d88', 'glog-scan-php-4719', 'glog-scan-php-ba41')
-    kotlin       = @('glog-scan-kotlin-d734')
-    resolver     = @('glog-scan-resolver-fbbb')
-    javascript   = @('glog-scan-javascript-0af1', 'glog-scan-javascript-3cb4')
-    objectscript = @('glog-scan-objectscript-b977')
-    go           = @('glog-scan-go-cb38', 'glog-scan-go-c6d3')
+    oss          = @((Get-ScanImage 'GLOG_SCAN_IMAGE_OSS_DEPSCAN'))
+    java         = @((Get-ScanImage 'GLOG_SCAN_IMAGE_JAVA_SPOTBUGS'), (Get-ScanImage 'GLOG_SCAN_IMAGE_JAVA_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_JAVA_OPENGREP_AUTO'))
+    ruby         = @((Get-ScanImage 'GLOG_SCAN_IMAGE_RUBY_BRAKEMAN'))
+    terraform    = @((Get-ScanImage 'GLOG_SCAN_IMAGE_TERRAFORM_TERRAFORM'), (Get-ScanImage 'GLOG_SCAN_IMAGE_TERRAFORM_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_TERRAFORM_OPENGREP_AUTO'))
+    cpp          = @((Get-ScanImage 'GLOG_SCAN_IMAGE_CPP_DEVSKIM'))
+    python       = @((Get-ScanImage 'GLOG_SCAN_IMAGE_PYTHON_BANDIT'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PYTHON_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PYTHON_OPENGREP_AUTO'))
+    secrets      = @((Get-ScanImage 'GLOG_SCAN_IMAGE_SECRETS_GITLEAKS'))
+    reachability = @((Get-ScanImage 'GLOG_SCAN_IMAGE_REACHABILITY_REACHABILITY'))
+    csharp       = @((Get-ScanImage 'GLOG_SCAN_IMAGE_CSHARP_OPENGREP_AUTO'), (Get-ScanImage 'GLOG_SCAN_IMAGE_CSHARP_OPENGREP'))
+    php          = @((Get-ScanImage 'GLOG_SCAN_IMAGE_PHP_DEVSKIM'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PHP_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PHP_OPENGREP_AUTO'))
+    kotlin       = @((Get-ScanImage 'GLOG_SCAN_IMAGE_KOTLIN_SPOTBUGS'))
+    resolver     = @((Get-ScanImage 'GLOG_SCAN_IMAGE_RESOLVER_GLOG'))
+    javascript   = @((Get-ScanImage 'GLOG_SCAN_IMAGE_JAVASCRIPT_OPENGREP_AUTO'), (Get-ScanImage 'GLOG_SCAN_IMAGE_JAVASCRIPT_OPENGREP'))
+    objectscript = @((Get-ScanImage 'GLOG_SCAN_IMAGE_OBJECTSCRIPT_OPENGREP'))
+    go           = @((Get-ScanImage 'GLOG_SCAN_IMAGE_GO_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_GO_OPENGREP_AUTO'))
     # CycloneDX SBOM generator (cdxgen). Writes /app/.glog/sbom.cdx.json which
     # the resolver (running after) uploads to /api/sca/resolver/sbom/.
-    sbom         = @('glog-scan-sbom-9828')
+    sbom         = @((Get-ScanImage 'GLOG_SCAN_IMAGE_SBOM_CDXGEN'))
     # VEX: depscan + reachability over the source, SBOM of this run as input.
-    vex          = @('glog-scan-oss-cc90')
+    vex          = @((Get-ScanImage 'GLOG_SCAN_IMAGE_OSS_DEPSCAN'))
 }
 
 function Show-Usage {
@@ -393,7 +437,7 @@ function Invoke-ScanLang {
                 $reach = if ($env:GLOG_VEX_REACHABILITY) { $env:GLOG_VEX_REACHABILITY } else { 'true' }
                 $extraArgs += @('-e', 'GLOG_VEX=true', '-e', "GLOG_VEX_REACHABILITY=$reach")
             }
-            if ($imageName -like 'glog-scan-sbom-9828*') {
+            if ($imageName -like "$(Get-ScanImage 'GLOG_SCAN_IMAGE_SBOM_CDXGEN')*") {
                 # SBOM (cdxgen + mvnw) needs network egress to Maven Central / npm registry
                 # and a persistent Maven cache to avoid re-downloading plugins each run.
                 $homeDir = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
@@ -511,7 +555,7 @@ $registry = 'ghcr.io/glogai/'
 $projectPath = (Get-Location).Path
 function Invoke-GlogCbom {
     param([string]$ScanPath, [string]$Registry)
-    $image = "${Registry}glog-scan-sbom-9828"
+    $image = "${Registry}$(Get-ScanImage 'GLOG_SCAN_IMAGE_SBOM_CDXGEN')"
     New-Item -ItemType Directory -Force -Path (Join-Path $ScanPath '.glog') | Out-Null
     Write-Output 'Generating CBOM (cryptographic inventory)'
     $script = 'rm -f /app/.glog/cbom.gen.json; cdxgen --include-crypto --spec-version 1.6 -o /app/.glog/cbom.gen.json /app || echo "WARNING: generator crypto pass failed; detector only."; python3 /usr/local/glog/cbom_detector.py --src /app --merge /app/.glog/cbom.gen.json --out /app/.glog/cbom.cdx.json; rm -f /app/.glog/cbom.gen.json'
@@ -697,7 +741,7 @@ $rebuildManifest = if ($env:REBUILD_MANIFEST) { $env:REBUILD_MANIFEST } else { '
 $rebuildPackage = if ($env:REBUILD_PACKAGE) { $env:REBUILD_PACKAGE } else { '' }
 $rebuildVersion = if ($env:REBUILD_VERSION) { $env:REBUILD_VERSION } else { '' }
 $rebuildEcosystem = if ($env:REBUILD_ECOSYSTEM) { $env:REBUILD_ECOSYSTEM } else { '' }
-$rebuildImage = if ($env:REBUILD_IMAGE) { $env:REBUILD_IMAGE } else { 'ghcr.io/glogai/glog-scan-rebuild-4673' }
+$rebuildImage = if ($env:REBUILD_IMAGE) { $env:REBUILD_IMAGE } else { "ghcr.io/glogai/$(Get-ScanImage 'GLOG_SCAN_IMAGE_REBUILD_REBUILD')" }
 # Bounded all-dependency mode: every package is downloaded and hashed, so an
 # unbounded run would make the scan far too slow on large lockfiles.
 $rebuildMaxPackages = if ($env:REBUILD_MAX_PACKAGES) { $env:REBUILD_MAX_PACKAGES } else { '' }

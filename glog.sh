@@ -3,31 +3,56 @@ set -euo pipefail
 
 ACTION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Image tags are derived, not authored. glog-tools/gbuild.sh names an image
+# glog-scan-<lang>-<first 4 hex of md5("<lang>-<tool>" + SALT)> and writes the
+# whole table to images.env, checked in beside this script and regenerated with
+# `./gbuild.sh --env` in glog-tools. glog-tools' test_images_env suite fails if
+# this copy drifts from the generator.
+#
+# The tags used to be written out here, in glog.ps1 and in glog-tools'
+# gscan.sh. Three hand-kept copies of a derived value drift, and they did: after
+# the C/C++ opengrep stage shipped, this script and glog.ps1 still named
+# devskim's tag alone, so an Action scan of a C/C++ repo quietly skipped the
+# stage every other driver ran.
+IMAGES_ENV="$ACTION_DIR/images.env"
+if [[ ! -f "$IMAGES_ENV" ]]; then
+  echo "ERROR: $IMAGES_ENV is missing, so no image tag can be resolved." >&2
+  echo "       It ships with this action; regenerate it from glog-tools with" >&2
+  echo "       './gbuild.sh --env' if the checkout is incomplete." >&2
+  exit 2
+fi
+# shellcheck source=images.env
+source "$IMAGES_ENV"
+
 DEFAULT_LANGS=("cpp" "java" "javascript" "python" "kotlin" "php" "ruby" "csharp" "oss" "terraform" "secrets" "resolver" "objectscript" "go") #"docker"
 
+# Which stage runs for which language stays this driver's own decision - several
+# languages have more than one engine built for them, and a few of those are not
+# run here (gosec, phpstan, clair, and devskim for csharp and javascript). The
+# tags, though, all come from images.env.
 declare -A IMAGE_MAP=(
-  [oss]="glog-scan-oss-cc90"
-  [java]="glog-scan-java-b608 glog-scan-java-3e9a glog-scan-java-e2b1"
-  [ruby]="glog-scan-ruby-35d9"
-  [terraform]="glog-scan-terraform-51c8 glog-scan-terraform-6b93 glog-scan-terraform-8bd5"
-  [cpp]="glog-scan-cpp-c97a"
-  [python]="glog-scan-python-5f95 glog-scan-python-0386 glog-scan-python-4166"
-  [secrets]="glog-scan-secrets-f27b"
-  [reachability]="glog-scan-reachability-f820"
-  [csharp]="glog-scan-csharp-b460 glog-scan-csharp-6c24"
-  [php]="glog-scan-php-7d88 glog-scan-php-4719 glog-scan-php-ba41"
-  [kotlin]="glog-scan-kotlin-d734"
-  [resolver]="glog-scan-resolver-fbbb"
-  [javascript]="glog-scan-javascript-0af1 glog-scan-javascript-3cb4"
-  #[docker]="glog-scan-docker-b5ea"
-  [objectscript]="glog-scan-objectscript-b977"
-  [go]="glog-scan-go-cb38 glog-scan-go-c6d3"
+  [oss]="$GLOG_SCAN_IMAGE_OSS_DEPSCAN"
+  [java]="$GLOG_SCAN_IMAGE_JAVA_SPOTBUGS $GLOG_SCAN_IMAGE_JAVA_OPENGREP $GLOG_SCAN_IMAGE_JAVA_OPENGREP_AUTO"
+  [ruby]="$GLOG_SCAN_IMAGE_RUBY_BRAKEMAN"
+  [terraform]="$GLOG_SCAN_IMAGE_TERRAFORM_TERRAFORM $GLOG_SCAN_IMAGE_TERRAFORM_OPENGREP $GLOG_SCAN_IMAGE_TERRAFORM_OPENGREP_AUTO"
+  [cpp]="$GLOG_SCAN_IMAGE_CPP_DEVSKIM"
+  [python]="$GLOG_SCAN_IMAGE_PYTHON_BANDIT $GLOG_SCAN_IMAGE_PYTHON_OPENGREP $GLOG_SCAN_IMAGE_PYTHON_OPENGREP_AUTO"
+  [secrets]="$GLOG_SCAN_IMAGE_SECRETS_GITLEAKS"
+  [reachability]="$GLOG_SCAN_IMAGE_REACHABILITY_REACHABILITY"
+  [csharp]="$GLOG_SCAN_IMAGE_CSHARP_OPENGREP_AUTO $GLOG_SCAN_IMAGE_CSHARP_OPENGREP"
+  [php]="$GLOG_SCAN_IMAGE_PHP_DEVSKIM $GLOG_SCAN_IMAGE_PHP_OPENGREP $GLOG_SCAN_IMAGE_PHP_OPENGREP_AUTO"
+  [kotlin]="$GLOG_SCAN_IMAGE_KOTLIN_SPOTBUGS"
+  [resolver]="$GLOG_SCAN_IMAGE_RESOLVER_GLOG"
+  [javascript]="$GLOG_SCAN_IMAGE_JAVASCRIPT_OPENGREP_AUTO $GLOG_SCAN_IMAGE_JAVASCRIPT_OPENGREP"
+  #[docker]="$GLOG_SCAN_IMAGE_DOCKER_TRIVY"
+  [objectscript]="$GLOG_SCAN_IMAGE_OBJECTSCRIPT_OPENGREP"
+  [go]="$GLOG_SCAN_IMAGE_GO_OPENGREP $GLOG_SCAN_IMAGE_GO_OPENGREP_AUTO"
   # CycloneDX SBOM generator (cdxgen). Writes /app/.glog/sbom.cdx.json which
   # the resolver (running after) uploads to /api/sca/resolver/sbom/.
-  [sbom]="glog-scan-sbom-9828"
+  [sbom]="$GLOG_SCAN_IMAGE_SBOM_CDXGEN"
   # VEX: depscan over the source with the SBOM as input + reachability.
   # Writes /app/.glog/vex.cdx.json; uploaded after the resolver pass.
-  [vex]="glog-scan-oss-cc90"
+  [vex]="$GLOG_SCAN_IMAGE_OSS_DEPSCAN"
 )
 
 upload_vex() {
@@ -77,7 +102,7 @@ upload_vex() {
 # resolve crypto API usage.
 run_cbom() {
   local path="$1" registry="$2"
-  local image="${registry}glog-scan-sbom-9828"
+  local image="${registry}${GLOG_SCAN_IMAGE_SBOM_CDXGEN}"
   mkdir -p "$path/.glog"
   echo "Generating CBOM (cryptographic inventory)"
   # 1) generator in crypto mode (strongest for Java), 2) our source detector
@@ -387,6 +412,75 @@ prepare_scoped_files_dir() {
   echo "$TEMP_SCAN_DIR"
 }
 
+# Resolve every image this scan is about to run, before it runs any of them.
+#
+# `docker run` reports a tag that is not in the registry as a "manifest unknown"
+# line inside its own output, and the scan then carries on and finishes with no
+# findings for that language - which reads exactly like a clean repo. Asking the
+# registry first turns that into a failure that names the tag and says what to
+# do about it.
+#
+# A language whose GLOG_IMAGE_<LANG> override is set is skipped: an override may
+# name a local image that was never pushed anywhere, so there is nothing to ask
+# the registry about. GLOG_SKIP_IMAGE_VERIFY=true skips the whole check, for an
+# air-gapped or offline run where the registry cannot be reached.
+verify_images() {
+  local registry="$1"; shift
+  local lang image_var image ref err
+  local missing=() warned=0
+
+  if [[ "${GLOG_SKIP_IMAGE_VERIFY:-false}" == "true" ]]; then
+    echo "Image verification skipped (GLOG_SKIP_IMAGE_VERIFY=true)."
+    return 0
+  fi
+  if ! command -v docker > /dev/null 2>&1; then
+    echo "WARNING: docker not on PATH, skipping image verification." >&2
+    return 0
+  fi
+
+  for lang in "$@"; do
+    [[ -z "${IMAGE_MAP[$lang]:-}" ]] && continue
+    image_var="GLOG_IMAGE_$(printf '%s' "$lang" | tr '[:lower:]-' '[:upper:]_')"
+    if [[ -n "${!image_var:-}" ]]; then
+      echo "Image check: $lang uses the local override ${image_var}."
+      continue
+    fi
+    for image in ${IMAGE_MAP[$lang]}; do
+      ref="${registry}${image}"
+      if ! err="$(docker manifest inspect "$ref" 2>&1 > /dev/null)"; then
+        # Only a registry saying the manifest is not there is worth failing a
+        # scan over. A timeout, a 429 or a missing credential is a fact about
+        # the network, not about the tag, and the pull that follows may well
+        # succeed - so it is a warning.
+        if [[ "$err" == *"manifest unknown"* || "$err" == *"not found"* \
+              || "$err" == *"name unknown"* || "$err" == *"no such manifest"* ]]; then
+          missing+=("$lang: $ref")
+        else
+          warned=$((warned + 1))
+          echo "WARNING: could not verify $ref (${err//$'\n'/ }); continuing." >&2
+        fi
+      fi
+    done
+  done
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "ERROR: these images could not be resolved in ${registry}:" >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    echo "       Each tag is derived from glog-tools/gbuild.sh; see the header of" >&2
+    echo "       images.env. Either the stage was never built and pushed, or" >&2
+    echo "       images.env has drifted from the build script - regenerate it with" >&2
+    echo "       './gbuild.sh --env' in glog-tools. A local image can be used" >&2
+    echo "       instead by setting GLOG_IMAGE_<LANG>; set GLOG_SKIP_IMAGE_VERIFY=true" >&2
+    echo "       to run offline." >&2
+    return 1
+  fi
+
+  if [[ "$warned" -gt 0 ]]; then
+    echo "Image check: the rest resolve in ${registry} ($warned unverified)."
+  else
+    echo "Image check: all mapped images resolve in ${registry}."
+  fi
+}
 
 scan_lang() {
   local lang=$1
@@ -442,7 +536,7 @@ scan_lang() {
       host_network="true"
     fi
 
-    if [[ "$image_name" == glog-scan-sbom-9828* ]]; then
+    if [[ "$image_name" == "${GLOG_SCAN_IMAGE_SBOM_CDXGEN}"* ]]; then
       # SBOM (cdxgen + mvnw) needs network egress to Maven Central / npm registry
       # and a persistent Maven cache to avoid re-downloading plugins each run.
       [[ "$host_network" == "true" ]] || EXTRA_ARGS+=(--network host)
@@ -462,7 +556,7 @@ scan_lang() {
     # Override the VEX builder baked into the oss image with a local copy: the
     # VEX logic changes far more often than the image, so this avoids rebuilding
     # and pushing a multi-GB scanner image for every change to vex_builder.py.
-    if [[ "$image_name" == glog-scan-oss-cc90* && -n "${GLOG_VEX_BUILDER:-}" ]]; then
+    if [[ "$image_name" == "${GLOG_SCAN_IMAGE_OSS_DEPSCAN}"* && -n "${GLOG_VEX_BUILDER:-}" ]]; then
       [[ -f "$GLOG_VEX_BUILDER" ]] || { echo "ERROR: GLOG_VEX_BUILDER=$GLOG_VEX_BUILDER not found" >&2; exit 1; }
       EXTRA_ARGS+=(-v "${GLOG_VEX_BUILDER}:/usr/local/glog/vex_builder.py:ro")
     fi
@@ -481,7 +575,7 @@ scan_lang() {
 
     # Host-side depscan VDB cache (baked baseline + incremental refresh).
     # A named volume (GLOG_DEPSCAN_VDB_VOLUME) takes precedence.
-    if [[ "$image_name" == glog-scan-oss-cc90* && -z "${GLOG_DEPSCAN_VDB_VOLUME:-}" \
+    if [[ "$image_name" == "${GLOG_SCAN_IMAGE_OSS_DEPSCAN}"* && -z "${GLOG_DEPSCAN_VDB_VOLUME:-}" \
           && "${GLOG_VDB_CACHE:-true}" == "true" ]]; then
       local vdb_dir="${GLOG_VDB_CACHE_DIR:-${HOME}/.glog-vdb}"
       mkdir -p "$vdb_dir"
@@ -503,10 +597,16 @@ scan_lang() {
     # before any container, and never from inside one. Forwarding any
     # GLOG_LOCAL_* knob here would hand a workflow variable to the container
     # without that pre-step having resolved it.
+    # `-e NAME` with no `=value` is read by the docker CLI from THIS shell's
+    # environment, so the token stays out of the command line - which every
+    # user on the host (and every step of the job, via `ps`) can read for as
+    # long as the scan runs.
+    export GLOGSERVICE="${GLOG_TOKEN}"
+    export GLOG_TOKEN
     docker run "${pull_args[@]}" --rm \
       "${EXTRA_ARGS[@]}" \
-      -e GLOGSERVICE="${GLOG_TOKEN}" \
-      -e GLOG_TOKEN="${GLOG_TOKEN}" \
+      -e GLOGSERVICE \
+      -e GLOG_TOKEN \
       -e HOST_UID="$(id -u)" \
       -e HOST_GID="$(id -g)" \
       -e SARIF_FORMAT_TYPE="$sarif_format_type" \
@@ -597,7 +697,7 @@ REBUILD_MANIFEST="${REBUILD_MANIFEST:-}"
 REBUILD_PACKAGE="${REBUILD_PACKAGE:-}"
 REBUILD_VERSION="${REBUILD_VERSION:-}"
 REBUILD_ECOSYSTEM="${REBUILD_ECOSYSTEM:-}"
-REBUILD_IMAGE="${REBUILD_IMAGE:-ghcr.io/glogai/glog-scan-rebuild-4673}"
+REBUILD_IMAGE="${REBUILD_IMAGE:-ghcr.io/glogai/${GLOG_SCAN_IMAGE_REBUILD_REBUILD}}"
 # Bounded all-dependency mode: every package is downloaded and hashed, so an
 # unbounded run would make the scan far too slow on large lockfiles.
 REBUILD_MAX_PACKAGES="${REBUILD_MAX_PACKAGES:-}"
@@ -747,6 +847,10 @@ for cmd in "${COMMANDS[@]}"; do
       if [[ "$WITH_VEX" == "true" ]]; then
         LANGUAGES+=('vex')
       fi
+
+      # Every image this run will use, resolved before the first container
+      # starts. Here rather than earlier because LANGUAGES is only final now.
+      verify_images "$REGISTRY" "${LANGUAGES[@]}"
 
       # Resolver passes. When the platform (committed / native SARIF UI) needs a
       # different structure than the Glog server, the resolver runs twice:

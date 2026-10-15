@@ -536,8 +536,6 @@ runs:
 
     - name: Git Add report
       run: |
-        git config --global user.name "$GLOG_ACTOR"
-        git config --global user.email "$GLOG_ACTOR_ID+$GLOG_ACTOR@users.noreply.github.com"
         SARIF_PATH="$GITHUB_WORKSPACE/$INPUT_PATH/.glog/glog-scan.sarif"
         if [ -f "$SARIF_PATH" ]; then
           git add -f "$SARIF_PATH"
@@ -547,8 +545,6 @@ runs:
       shell: bash
       env:
         INPUT_PATH: ${{ inputs.path }}
-        GLOG_ACTOR: ${{ github.actor }}
-        GLOG_ACTOR_ID: ${{ github.actor_id }}
 
     - name: Git Add debug log
       if: ${{ inputs.debug == 'true' }}
@@ -571,9 +567,26 @@ runs:
 
     - name: Git Commit report
       if: env.no_changes == 'false'
+      # The identity the commit and the rebase below are given. It reaches the
+      # script through the environment rather than an inline expansion; the
+      # commands quote it, and a name that arrived this way cannot break out of
+      # those quotes. An unset GLOG_ACTOR would make git refuse the commit with
+      # "empty ident name", so these two names must stay on this step.
+      env:
+        GLOG_ACTOR: ${{ github.actor }}
+        GLOG_ACTOR_ID: ${{ github.actor_id }}
       run: |
           DATE=$(date +"%Y-%m-%d %H:%M:%S")
-          git commit -am "[$DATE] Glog.AI assessment"
+          # The report and the debug log were staged by name above, and those
+          # are the only two paths this commit may carry: `-a` would sweep every
+          # other tracked modification in the scanned checkout into a commit
+          # that gets PUSHED to the caller's branch. Identity travels with the
+          # commands that need it (this commit and the rebase in the retry loop
+          # below) rather than being written into the runner's global git config,
+          # which would outlive this step and apply to every later step.
+          git -c user.name="$GLOG_ACTOR" \
+              -c user.email="$GLOG_ACTOR_ID+$GLOG_ACTOR@users.noreply.github.com" \
+              commit -m "[$DATE] Glog.AI assessment"
 
           BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           if [ -z "$BRANCH" ] || [ "$(git rev-parse --abbrev-ref HEAD)" = "HEAD" ]; then
@@ -591,7 +604,11 @@ runs:
             fi
             echo "Push rejected (attempt $attempt); syncing with remote and retrying..."
             git fetch origin "$BRANCH" || true
-            if ! git rebase "origin/$BRANCH"; then
+            # A rebase re-applies the commit above, so it needs the same
+            # identity the commit was given.
+            if ! git -c user.name="$GLOG_ACTOR" \
+                     -c user.email="$GLOG_ACTOR_ID+$GLOG_ACTOR@users.noreply.github.com" \
+                     rebase "origin/$BRANCH"; then
               git rebase --abort || true
               echo "Rebase conflict on $BRANCH; skipping SARIF push for this run."
               exit 0
@@ -684,7 +701,15 @@ runs:
 
             const rule = rules.find(x => x.id === r.ruleId);
             const message = r.message?.text ?? rule?.name ?? "Finding";
-            const severity = rule?.properties?.severity ?? r.level ?? "UNKNOWN";
+            // What the pipeline actually publishes is `security-severity` (a
+            // CVSS-style score - glog-resolver's Sarif rewrites result levels
+            // from it and leaves the property on the rule), while
+            // `properties.severity` is the word some other scanners use and
+            // `r.level` is the bucket. The word alone loses the score, the
+            // score alone loses the bucket, so carry both when both exist.
+            const severityWord = rule?.properties?.severity ?? r.level ?? "UNKNOWN";
+            const severityScore = rule?.properties?.["security-severity"];
+            const severity = severityScore ? `${severityWord} (${severityScore})` : severityWord;
 
             const loc = r.locations?.[0];
             const uri = loc?.physicalLocation?.artifactLocation?.uri ?? "unknown";
@@ -693,8 +718,15 @@ runs:
             const startCol = region.startColumn ?? "?";
             const snippet = region.snippet?.text ?? "";
             const sourceLang = region.sourceLanguage ?? "text";
-            const cwe = (rule?.properties?.cwe ?? []).map(x => x.id).join(", ") || "(none)";
-            const tags = (rule?.properties?.tags ?? []).join(", ") || "(none)";
+            // `cwe` is an array of `{id}` objects in this pipeline's SARIF but a
+            // bare string in several other tools', and `tags` is an array here
+            // but has been a string elsewhere - reading either as a fixed shape
+            // throws, and a throw in this script takes the whole issue step
+            // down with it. `[].concat` normalises both spellings.
+            const cwe = [].concat(rule?.properties?.cwe ?? [])
+              .map(x => (typeof x === "string" ? x : x?.id))
+              .filter(Boolean).join(", ") || "(none)";
+            const tags = [].concat(rule?.properties?.tags ?? []).filter(Boolean).join(", ") || "(none)";
 
             const fp = pickFingerprint(r) ?? `${r.ruleId}:${uri}:${startLine}:${startCol}`;
             const marker = `glog-fingerprint: ${fp}`;

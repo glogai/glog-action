@@ -40,12 +40,17 @@ REGIONS = {
     "glog.ps1": (r'while \(\$index -lt \$scriptArgs\.Count\) \{', r'^}$', PSH_LABEL),
 }
 
-# `-e NAME=value` (bash, quoted or not) and `'-e', "NAME=..."` / `('-e', ("NAME=" + ...`
-# (pwsh) -- the container environment, which decides as much of a scan's
-# behaviour as the options do.
+# The container environment, which decides as much of a scan's behaviour as the
+# options do. Both spellings count, on both surfaces: `-e NAME=value` (bash,
+# quoted or not) and `'-e', "NAME=..."` / `('-e', ("NAME=" + ...` (pwsh) set the
+# variable from the argument, while a bare `-e NAME` copies it from the shell's
+# own environment. glog.sh uses the bare form for the two credentials on purpose
+# -- spelled `=value` the token lands in the docker-run argv, where any process
+# on the host can read it out of `ps`. A reader that only knew the first
+# spelling reads that as the variable having been dropped, and fails.
 ENV_READERS = {
-    "glog.sh": re.compile(r"""-e\s+"?([A-Z][A-Z0-9_]*)="""),
-    "glog.ps1": re.compile(r"""'-e',\s*\(?["']([A-Z][A-Z0-9_]*)="""),
+    "glog.sh": re.compile(r"""-e\s+"?([A-Z][A-Z0-9_]*)"?(?=[=\s\\]|$)"""),
+    "glog.ps1": re.compile(r"""'-e',\s*\(?["']([A-Z][A-Z0-9_]*)["']?(?=[=\s),]|$)"""),
 }
 
 # There are no deliberate one-sided names on either surface today. If one ever
