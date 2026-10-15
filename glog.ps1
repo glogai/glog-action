@@ -50,6 +50,32 @@ Options:
   --vex                     Generate a VEX with depscan + reachability (implies --sbom).
                             Install dependencies first or most results stay in_triage.
   --scl-uuid UUID           Source Code Location UUID to bind SARIF/SBOM uploads to
+  --server-sarif-format-type TYPE
+                            Format for the uploaded SARIF when it differs from
+                            --sarif-format-type: the resolver then runs twice, once per format.
+  --sbom-min-grade GRADE    Fail the run (exit 3) when the SBOM scores below GRADE (A-F)
+  --fail-on-upload-error    Exit non-zero when the resolver reports UPLOAD_FAILED
+  --supply-chain            Run the supply-chain (dependency) analysis
+  --supply-chain-policy P   Supply-chain policy name (implies --supply-chain)
+  --supply-chain-offline    Supply-chain analysis without network access
+  --supply-chain-cache-only Use only cached package metadata
+  --supply-chain-fail-on S  Fail on findings at or above S (INFO, LOW, MEDIUM, HIGH, CRITICAL)
+  --supply-chain-format F   Supply-chain report format (default: both)
+  --privacy-tier TIER       full (default) | metrics | none. Controls what leaves the tenant.
+  --mock-resolver           Serve AI answers from the server-side OpenAI mock (no OpenAI cost;
+                            simulated latency and Tier 5 rate limits). Testing only.
+  --api-url URL             Server URL for the host-side uploads (VEX, rebuild). The resolver
+                            derives its own URL from --client/--env (dev -> <client>.dev.glog.ai,
+                            localhost -> http://<client>.localhost:8000), so with --upload the
+                            two must agree or the scan is refused.
+  --rebuild                 Discover all lockfile dependencies and run the worker for each
+  --rebuild-artifact PATH   Optional single package artifact
+  --rebuild-manifest PATH   Optional published manifest for single-artifact mode
+  --rebuild-package NAME    Package name for single-artifact mode
+  --rebuild-version VERSION Package version for single-artifact mode
+  --rebuild-ecosystem NAME  npm, pypi, go, cargo, maven or rubygems (single-artifact mode)
+  --rebuild-image IMAGE     Rebuild worker image
+  --max-packages N          Cap dependencies verified in all-dependency rebuild mode
 '@ | Write-Output
 }
 
@@ -79,8 +105,8 @@ function Get-RelativePath {
 function Get-HostIdValue {
     param([Parameter(Mandatory = $true)][ValidateSet('uid', 'gid')][string]$Kind)
 
-    $isWindows = $env:OS -eq 'Windows_NT'
-    if ($isWindows) {
+    $isWindowsHost = $env:OS -eq 'Windows_NT'
+    if ($isWindowsHost) {
         return '1000'
     }
 
@@ -125,6 +151,83 @@ function Persist-ScopedScanArtifacts {
     }
 
     Write-Output "Persisted scoped scan artifacts to $projectGlogDir"
+}
+
+function Test-ScanArtifacts {
+    # Report what a finished scan left in .glog/ and fail the step when an
+    # artifact the run promised is missing. Mirrors verify_scan_artifacts()
+    # in glog.sh.
+    #
+    # This one RETURNS a verdict, so its narrative goes to the host stream
+    # (Write-Host) and never joins the pipeline: a caller that captured
+    # Write-Output would get @('report...', $false), which is truthy whatever
+    # the verdict was.
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectPath,
+        [AllowEmptyString()][string]$SbomOnly = 'false',
+        [AllowEmptyString()][string]$WithSbom = 'false',
+        [AllowEmptyString()][string]$ResolverUpload = 'false'
+    )
+
+    $glogDir = Join-Path -Path $ProjectPath -ChildPath '.glog'
+    $missing = $false
+
+    Write-Host "--- Glog artifact summary ($glogDir) ---"
+    if (Test-Path -LiteralPath $glogDir -PathType Container) {
+        Get-ChildItem -LiteralPath $glogDir -Force | ForEach-Object {
+            Write-Host ("  {0,10}  {1}" -f $_.Length, $_.Name)
+        }
+    } else {
+        Write-Host '  (no .glog directory was produced)'
+    }
+
+    if ($SbomOnly -ne 'true') {
+        $sarif = Join-Path -Path $glogDir -ChildPath 'glog-scan.sarif'
+        if ((Test-Path -LiteralPath $sarif) -and ((Get-Item -LiteralPath $sarif).Length -gt 0)) {
+            Write-Host "  SARIF: OK ($sarif)"
+        } else {
+            [Console]::Error.WriteLine('Glog: SARIF results are missing.')
+            $missing = $true
+        }
+    }
+
+    if ($WithSbom -eq 'true') {
+        $cdxFiles = @()
+        if (Test-Path -LiteralPath $glogDir -PathType Container) {
+            $cdxFiles = @(Get-ChildItem -LiteralPath $glogDir -Filter '*.cdx.json' -Force)
+        }
+        if ($cdxFiles.Count -gt 0) {
+            Write-Host "  SBOM: OK ($(($cdxFiles | ForEach-Object { $_.Name }) -join ' '))"
+        } else {
+            [Console]::Error.WriteLine('Glog: SBOM results are missing.')
+            $missing = $true
+        }
+    }
+
+    if ($ResolverUpload -eq 'true') {
+        Write-Host '  Upload: requested (server ingestion is reported by the resolver above)'
+    } else {
+        Write-Host '  Upload: disabled (pass on-prem-upload=true / --upload to send results to the server)'
+    }
+    Write-Host '----------------------------------------'
+
+    if ($missing) {
+        [Console]::Error.WriteLine('Glog: expected scan artifacts are missing - failing the step.')
+        return $false
+    }
+    return $true
+}
+
+function Get-ResolverServerUrl {
+    # The resolver (GlogService.buildBaseUrl) ignores GLOG_API_URL and derives
+    # the server from CLIENT/ENV. Mirrors resolver_server_url() in glog.sh.
+    param([AllowEmptyString()][string]$Client, [AllowEmptyString()][string]$EnvironmentName)
+
+    $c = if ($Client) { $Client } else { 'test' }
+    $e = if ($EnvironmentName) { $EnvironmentName.ToLowerInvariant() } else { '' }
+    if (-not $e) { return "https://$c.glog.ai" }
+    if ($e -eq 'localhost') { return "http://$c.localhost:8000" }
+    return "https://$c.$e.glog.ai"
 }
 
 function Get-DetectedLanguages {
@@ -227,11 +330,16 @@ function Invoke-ScanLang {
         [Parameter(Mandatory = $true)][string]$Lang,
         [Parameter(Mandatory = $true)][string]$PathToScan,
         [AllowEmptyString()][string]$Ignore = '',
-        [Parameter(Mandatory = $true)][string]$Client,
-        [Parameter(Mandatory = $true)][string]$EnvironmentName,
+        # Client and token may legitimately be empty (no --client / no
+        # GLOG_TOKEN): a Mandatory parameter rejects an empty string, which
+        # would fail such a scan before it starts. glog.sh sets no such bar.
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Client,
+        # --env is optional too: with no environment the resolver targets the
+        # tenant URL, which is what glog.sh falls back to as well.
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$EnvironmentName,
         [Parameter(Mandatory = $true)][string]$Registry,
         [Parameter(Mandatory = $true)][string]$SarifFormatType,
-        [Parameter(Mandatory = $true)][string]$GlogToken,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$GlogToken,
         [Parameter(Mandatory = $true)][string]$ResolverUpload,
         [AllowEmptyString()][string]$WithSbom = 'false',
         [AllowEmptyString()][string]$SbomOnly = 'false',
@@ -239,7 +347,13 @@ function Invoke-ScanLang {
         [AllowEmptyString()][string]$SclUuid = '',
         [AllowEmptyString()][string]$ForceInventory = 'false',
         [AllowEmptyString()][string]$PrivacyTier = 'full',
-        [AllowEmptyString()][string]$ApiUrl = ''
+        [AllowEmptyString()][string]$ApiUrl = '',
+        [AllowEmptyString()][string]$SupplyChainEnabled = 'false',
+        [AllowEmptyString()][string]$SupplyChainPolicy = '',
+        [AllowEmptyString()][string]$SupplyChainOffline = 'false',
+        [AllowEmptyString()][string]$SupplyChainCacheOnly = 'false',
+        [AllowEmptyString()][string]$SupplyChainFailOn = '',
+        [AllowEmptyString()][string]$SupplyChainFormat = 'both'
     )
 
     if (-not $imageMap.ContainsKey($Lang)) {
@@ -250,12 +364,12 @@ function Invoke-ScanLang {
     $hostUid = Get-HostIdValue -Kind uid
     $hostGid = Get-HostIdValue -Kind gid
     $resolvedScanPath = Get-AbsolutePath -PathValue $PathToScan
-    $isWindows = $env:OS -eq 'Windows_NT'
+    $isWindowsHost = $env:OS -eq 'Windows_NT'
     $volName = $null
     $scanMount = "${resolvedScanPath}:/app"
 
     try {
-        if ($isWindows) {
+        if ($isWindowsHost) {
             $volName = "glog-src-$([System.Guid]::NewGuid().ToString('N'))"
 
             & docker volume create $volName
@@ -310,6 +424,12 @@ function Invoke-ScanLang {
                 '-e', "SCL_UUID=$SclUuid",
                 '-e', "PRIVACY_TIER=$PrivacyTier",
                 '-e', "MOCK_RESOLVER=$(if ($env:MOCK_RESOLVER) { $env:MOCK_RESOLVER } else { 'false' })",
+                '-e', "SUPPLY_CHAIN_ENABLED=$SupplyChainEnabled",
+                '-e', "SUPPLY_CHAIN_POLICY=$SupplyChainPolicy",
+                '-e', "SUPPLY_CHAIN_OFFLINE=$SupplyChainOffline",
+                '-e', "SUPPLY_CHAIN_CACHE_ONLY=$SupplyChainCacheOnly",
+                '-e', "SUPPLY_CHAIN_FAIL_ON=$SupplyChainFailOn",
+                '-e', "SUPPLY_CHAIN_FORMAT=$SupplyChainFormat",
 
                 '-e', "IGNORE=$Ignore",
                 '-e', "CLIENT=$Client",
@@ -318,12 +438,17 @@ function Invoke-ScanLang {
                 '-e', "HOST_PROJECT_PATH=$resolvedScanPath",
                 '-e', ("GLOG_COMPONENT=" + $(if ($env:GLOG_COMPONENT) { $env:GLOG_COMPONENT } else { Split-Path -Leaf $resolvedScanPath })),
                 '-e', ("GLOG_BRANCH=" + $(foreach ($v in @($env:GLOG_BRANCH, $env:GITHUB_HEAD_REF, $env:GITHUB_REF_NAME, $env:BUILD_SOURCEBRANCHNAME, $env:CI_COMMIT_REF_NAME, $env:BRANCH_NAME)) { if ($v) { $v; break } })),
+                '-e', ("GLOG_TRIAGE_TIMEOUT_MINUTES=" + $(if ($env:GLOG_TRIAGE_TIMEOUT_MINUTES) { $env:GLOG_TRIAGE_TIMEOUT_MINUTES } else { '1440' })),
+                '-e', ("GLOG_SOCKET_TIMEOUT_MS=" + $(if ($env:GLOG_SOCKET_TIMEOUT_MS) { $env:GLOG_SOCKET_TIMEOUT_MS } else { '1800000' })),
+                '-e', ("GLOG_CONNECT_TIMEOUT_MS=" + $(if ($env:GLOG_CONNECT_TIMEOUT_MS) { $env:GLOG_CONNECT_TIMEOUT_MS } else { '60000' })),
+                '-e', ("GLOG_CONNECTION_REQUEST_TIMEOUT_MS=" + $(if ($env:GLOG_CONNECTION_REQUEST_TIMEOUT_MS) { $env:GLOG_CONNECTION_REQUEST_TIMEOUT_MS } else { '60000' })),
                 '-e', ("GLOG_PROFILE=" + $(if ($env:GLOG_PROFILE) { $env:GLOG_PROFILE } else { '' })),
                 '-e', ("GLOG_REMEDIATION_BULK=" + $(if ($env:GLOG_REMEDIATION_BULK) { $env:GLOG_REMEDIATION_BULK } else { '1' })),
                 '-e', ("GLOG_REMEDIATION_BATCH=" + $(if ($env:GLOG_REMEDIATION_BATCH) { $env:GLOG_REMEDIATION_BATCH } else { '20' })),
                 '-e', ("GLOG_REMEDIATION_BATCH_LINGER_MS=" + $(if ($env:GLOG_REMEDIATION_BATCH_LINGER_MS) { $env:GLOG_REMEDIATION_BATCH_LINGER_MS } else { '750' })),
                 '-e', ("GLOG_REMEDIATION_INFLIGHT_BATCHES=" + $(if ($env:GLOG_REMEDIATION_INFLIGHT_BATCHES) { $env:GLOG_REMEDIATION_INFLIGHT_BATCHES } else { '8' })),
-                '-e', ("GLOG_FP_FROM_VALIDATE=" + $(if ($env:GLOG_FP_FROM_VALIDATE) { $env:GLOG_FP_FROM_VALIDATE } else { 'true' }))
+                '-e', ("GLOG_FP_FROM_VALIDATE=" + $(if ($env:GLOG_FP_FROM_VALIDATE) { $env:GLOG_FP_FROM_VALIDATE } else { 'true' })),
+                '-e', ("GLOG_DEDUP_STATEMENT_SCOPE_ELEMENT_SPLIT=" + $(if ($env:GLOG_DEDUP_STATEMENT_SCOPE_ELEMENT_SPLIT) { $env:GLOG_DEDUP_STATEMENT_SCOPE_ELEMENT_SPLIT } else { 'false' }))
 
             )
 
@@ -363,7 +488,7 @@ function Invoke-ScanLang {
             }
         }
 
-        if ($isWindows) {
+        if ($isWindowsHost) {
             & docker run --rm -v "${volName}:/app" -v "${resolvedScanPath}/.glog:/out" alpine sh -c "if [ -d /app/.glog ]; then cp -r /app/.glog/. /out/; fi"
             if ($LASTEXITCODE -ne 0) {
                 throw "Failed to copy scan results from Docker volume '$volName' for language '$Lang'."
@@ -450,6 +575,95 @@ function Send-GlogVex {
     }
 }
 
+function Get-LogHead {
+    param([string]$File, [int]$Max = 300)
+    if (-not (Test-Path -LiteralPath $File)) { return '' }
+    try {
+        $raw = Get-Content -LiteralPath $File -Raw
+        if (-not $raw) { return '' }
+        if ($raw.Length -le $Max) { return $raw }
+        return $raw.Substring(0, $Max)
+    } catch { return '' }
+}
+
+function Test-GlogSbomQuality {
+    # Optional CI gate: score the SBOM on the Glog server (nothing is stored)
+    # and fail the run when the grade is below $MinGrade (A-F). Mirrors
+    # sbom_quality_gate() in glog.sh - same endpoint, same response shape.
+    #
+    # This one RETURNS a verdict, so its narrative goes to the host stream
+    # (Write-Host) and never joins the pipeline: a caller that captured
+    # Write-Output would get @('SBOM quality: ...', $false), which is truthy
+    # whether or not the gate failed.
+    param([string]$ScanPath, [string]$MinGrade, [string]$ApiUrl, [string]$Client,
+          [string]$EnvironmentName, [string]$GlogToken)
+    if (-not $MinGrade) { return $false }
+    $sbomFile = Join-Path -Path $ScanPath -ChildPath '.glog/sbom.cdx.json'
+    if (-not (Test-Path -LiteralPath $sbomFile)) {
+        Write-Host "WARNING: sbom-min-grade=$MinGrade set but $sbomFile was not produced; gate skipped."
+        return $false
+    }
+    $api = $ApiUrl
+    if (-not $api -and $Client) {
+        $api = if ($EnvironmentName -match '^(dev|development)$') { "https://$Client.dev.glog.ai" } else { "https://$Client.glog.ai" }
+    }
+    if (-not $api -or -not $GlogToken) {
+        Write-Host 'WARNING: SBOM quality gate skipped (API URL / token missing).'
+        return $false
+    }
+    $outFile = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath 'glog-sbom-quality.json'
+    if (Test-Path -LiteralPath $outFile) { Remove-Item -LiteralPath $outFile -Force }
+    $code = '000'
+    try {
+        $code = ((& curl.exe -sS -o $outFile -w '%{http_code}' -X POST `
+            -H "Authorization: Token $GlogToken" `
+            -F "sbom_file=@$sbomFile;type=application/json" `
+            -F "min_grade=$MinGrade" `
+            "$($api.TrimEnd('/'))/api/sca/resolver/sbom-quality/") -join '')
+    } catch {
+        $code = '000'
+    }
+    if ($code -ne '200') {
+        Write-Host "WARNING: SBOM quality gate could not run (HTTP $code): $(Get-LogHead -File $outFile)"
+        return $false
+    }
+    $resp = $null
+    try { $resp = Get-Content -LiteralPath $outFile -Raw | ConvertFrom-Json } catch { $resp = $null }
+    if (-not $resp) {
+        Write-Host 'WARNING: SBOM quality gate could not read the server response; gate skipped.'
+        return $false
+    }
+    $grade = if ($resp.PSObject.Properties['grade']) { $resp.grade } else { '?' }
+    $score = if ($resp.PSObject.Properties['score']) { $resp.score } else { '?' }
+    # StrictMode: never touch a property that may be absent on the parsed JSON.
+    # The existence guard wraps the *value* ($resp.categories) -- indexing
+    # $resp.PSObject.Properties would hand back the member descriptor instead of
+    # the array, and every $c would then read as an empty object.
+    $categories = if ($resp.PSObject.Properties['categories']) { @($resp.categories) } else { @() }
+    foreach ($c in $categories) {
+        if ($c -and $c.PSObject.Properties['applicable'] -and $c.applicable) {
+            $cLabel = if ($c.PSObject.Properties['label']) { $c.label } else { '?' }
+            $cScore = if ($c.PSObject.Properties['score']) { $c.score } else { '?' }
+            $cDetail = if ($c.PSObject.Properties['detail']) { $c.detail } else { '' }
+            [Console]::Error.WriteLine("  ${cLabel}: $cScore - $cDetail")
+        }
+    }
+    $caps = if ($resp.PSObject.Properties['caps']) { @($resp.caps) } else { @() }
+    foreach ($c in $caps) {
+        if ($c) {
+            $capGrade = if ($c.PSObject.Properties['max_grade']) { $c.max_grade } else { '?' }
+            $capReason = if ($c.PSObject.Properties['reason']) { $c.reason } else { '' }
+            [Console]::Error.WriteLine("  cap ${capGrade}: $capReason")
+        }
+    }
+    Write-Host "SBOM quality: grade $grade (score $score), required $MinGrade or better."
+    if ($resp.PSObject.Properties['gate'] -and $resp.gate -eq 'fail') {
+        [Console]::Error.WriteLine("ERROR: SBOM quality grade $grade is below sbom-min-grade=$MinGrade.")
+        return $true
+    }
+    return $false
+}
+
 $glogToken = if ($env:GLOG_TOKEN) { $env:GLOG_TOKEN } else { '' }
 $sarifFormatType = if ($env:SARIF_FORMAT_TYPE) { $env:SARIF_FORMAT_TYPE } else { 'GITHUB' }
 $resolverUpload = 'false'
@@ -463,6 +677,30 @@ $sclUuid = ''
 $forceInventory = $false
 $privacyTier = if ($env:PRIVACY_TIER) { $env:PRIVACY_TIER } else { 'full' }
 $apiUrl = if ($env:GLOG_API_URL) { $env:GLOG_API_URL } else { '' }
+$serverSarifFormatType = if ($env:SERVER_SARIF_FORMAT_TYPE) { $env:SERVER_SARIF_FORMAT_TYPE } else { '' }
+$sbomMinGrade = if ($env:GLOG_SBOM_MIN_GRADE) { $env:GLOG_SBOM_MIN_GRADE } else { '' }
+$failOnUploadError = if ($env:FAIL_ON_UPLOAD_ERROR) { $env:FAIL_ON_UPLOAD_ERROR } else { 'false' }
+# Sticky per-run verdicts, read after the scan to pick the exit code.
+$sbomGateFailed = $false
+$uploadFailed = $false
+# Touched when a scan starts; .glog/glog-scan.log is trusted only if newer.
+$scanStartStamp = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "glog-scan-start-$([System.Guid]::NewGuid().ToString('N'))"
+$supplyChainEnabled = if ($env:SUPPLY_CHAIN_ENABLED) { $env:SUPPLY_CHAIN_ENABLED } else { 'false' }
+$supplyChainPolicy = if ($env:SUPPLY_CHAIN_POLICY) { $env:SUPPLY_CHAIN_POLICY } else { '' }
+$supplyChainOffline = if ($env:SUPPLY_CHAIN_OFFLINE) { $env:SUPPLY_CHAIN_OFFLINE } else { 'false' }
+$supplyChainCacheOnly = if ($env:SUPPLY_CHAIN_CACHE_ONLY) { $env:SUPPLY_CHAIN_CACHE_ONLY } else { 'false' }
+$supplyChainFailOn = if ($env:SUPPLY_CHAIN_FAIL_ON) { $env:SUPPLY_CHAIN_FAIL_ON } else { '' }
+$supplyChainFormat = if ($env:SUPPLY_CHAIN_FORMAT) { $env:SUPPLY_CHAIN_FORMAT } else { 'both' }
+$rebuild = if ($env:REBUILD) { $env:REBUILD } else { 'false' }
+$rebuildArtifact = if ($env:REBUILD_ARTIFACT) { $env:REBUILD_ARTIFACT } else { '' }
+$rebuildManifest = if ($env:REBUILD_MANIFEST) { $env:REBUILD_MANIFEST } else { '' }
+$rebuildPackage = if ($env:REBUILD_PACKAGE) { $env:REBUILD_PACKAGE } else { '' }
+$rebuildVersion = if ($env:REBUILD_VERSION) { $env:REBUILD_VERSION } else { '' }
+$rebuildEcosystem = if ($env:REBUILD_ECOSYSTEM) { $env:REBUILD_ECOSYSTEM } else { '' }
+$rebuildImage = if ($env:REBUILD_IMAGE) { $env:REBUILD_IMAGE } else { 'ghcr.io/glogai/glog-scan-rebuild-4673' }
+# Bounded all-dependency mode: every package is downloaded and hashed, so an
+# unbounded run would make the scan far too slow on large lockfiles.
+$rebuildMaxPackages = if ($env:REBUILD_MAX_PACKAGES) { $env:REBUILD_MAX_PACKAGES } else { '' }
 
 $scriptArgs = $args
 $index = 0
@@ -544,6 +782,12 @@ while ($index -lt $scriptArgs.Count) {
             $index += 2
             continue
         }
+        '--server-sarif-format-type' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --server-sarif-format-type' }
+            $serverSarifFormatType = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
         '-u' {
             $resolverUpload = 'true'
             $index++
@@ -581,6 +825,13 @@ while ($index -lt $scriptArgs.Count) {
             $index++
             continue
         }
+        '--sbom-min-grade' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --sbom-min-grade' }
+            $sbomMinGrade = $scriptArgs[$index + 1]
+            $withSbom = 'true'
+            $index += 2
+            continue
+        }
         '--scl-uuid' {
             if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --scl-uuid' }
             $sclUuid = $scriptArgs[$index + 1]
@@ -605,6 +856,102 @@ while ($index -lt $scriptArgs.Count) {
             $index += 2
             continue
         }
+        '--fail-on-upload-error' {
+            $failOnUploadError = 'true'
+            $index++
+            continue
+        }
+        '--supply-chain' {
+            $supplyChainEnabled = 'true'
+            $index++
+            continue
+        }
+        '--supply-chain-policy' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --supply-chain-policy' }
+            $supplyChainPolicy = $scriptArgs[$index + 1]
+            $supplyChainEnabled = 'true'
+            $index += 2
+            continue
+        }
+        '--supply-chain-offline' {
+            $supplyChainOffline = 'true'
+            $supplyChainEnabled = 'true'
+            $index++
+            continue
+        }
+        '--supply-chain-cache-only' {
+            $supplyChainCacheOnly = 'true'
+            $supplyChainEnabled = 'true'
+            $index++
+            continue
+        }
+        '--supply-chain-fail-on' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --supply-chain-fail-on' }
+            $supplyChainFailOn = $scriptArgs[$index + 1]
+            $supplyChainEnabled = 'true'
+            $index += 2
+            continue
+        }
+        '--supply-chain-format' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --supply-chain-format' }
+            $supplyChainFormat = $scriptArgs[$index + 1]
+            $supplyChainEnabled = 'true'
+            $index += 2
+            continue
+        }
+        '--rebuild' {
+            $rebuild = 'true'
+            $index++
+            continue
+        }
+        '--rebuild-artifact' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --rebuild-artifact' }
+            $rebuildArtifact = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
+        '--rebuild-manifest' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --rebuild-manifest' }
+            $rebuildManifest = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
+        '--rebuild-package' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --rebuild-package' }
+            $rebuildPackage = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
+        '--rebuild-version' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --rebuild-version' }
+            $rebuildVersion = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
+        '--rebuild-ecosystem' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --rebuild-ecosystem' }
+            $rebuildEcosystem = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
+        '--rebuild-image' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --rebuild-image' }
+            $rebuildImage = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
+        '--max-packages' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --max-packages' }
+            $rebuildMaxPackages = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
+        '--rebuild-max-packages' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --rebuild-max-packages' }
+            $rebuildMaxPackages = $scriptArgs[$index + 1]
+            $index += 2
+            continue
+        }
         '-h' {
             Show-Usage
             exit 0
@@ -626,6 +973,26 @@ if ($commands.Count -eq 0) {
     exit 1
 }
 
+# The resolver (GlogService.buildBaseUrl) ignores GLOG_API_URL and derives the
+# server from CLIENT/ENV. An --api-url that names a different host would send
+# the host-side uploads to one server and the resolver's findings to another,
+# so refuse that combination up front.
+if ($apiUrl -and $resolverUpload -eq 'true') {
+    $apiNorm = $apiUrl.TrimEnd('/')
+    if ($apiNorm.EndsWith('/api')) { $apiNorm = $apiNorm.Substring(0, $apiNorm.Length - 4) }
+    $resolverUrl = Get-ResolverServerUrl -Client $client -EnvironmentName $environmentName
+    if ($apiNorm -ne $resolverUrl) {
+        [Console]::Error.WriteLine("ERROR: --api-url is $apiUrl but the resolver will upload to $resolverUrl (derived from --client/--env).")
+        [Console]::Error.WriteLine('       For a local server pass --env localhost; for a hosted tenant drop --api-url or make it match.')
+        exit 1
+    }
+}
+
+if ($supplyChainFailOn -and $supplyChainFailOn -notin @('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')) {
+    [Console]::Error.WriteLine("Invalid --supply-chain-fail-on: $supplyChainFailOn (expected INFO, LOW, MEDIUM, HIGH or CRITICAL)")
+    exit 1
+}
+
 try {
     $projectPath = Get-AbsolutePath -PathValue $projectPath
 
@@ -641,6 +1008,7 @@ try {
             }
             'scan' {
                 $scanPath = $projectPath
+                New-Item -ItemType File -Force -Path $scanStartStamp | Out-Null
 
                 if ($files.Count -gt 0) {
                     Write-Output 'Preparing scoped scan for selected files...'
@@ -661,8 +1029,9 @@ try {
                 # EXTENSIONS to scanner keys, so nothing it returns could ever
                 # select it. Chosen here, after $languages is populated, so it
                 # applies however Python was selected: by detection or by an
-                # explicit -l python. A scan with no Python is untouched.
-                if ($languages -contains 'python') {
+                # explicit -l python. A scan with no Python is untouched, and an
+                # explicit -l reachability is not queued twice.
+                if ($languages -contains 'python' -and -not ($languages -contains 'reachability')) {
                     [void]$languages.Add('reachability')
                 }
 
@@ -685,10 +1054,54 @@ try {
                     Write-Output 'Note: SBOM will be written locally to .glog/ only. To send it to the Glog server pass on-prem-upload=true.'
                 }
 
+                if ($privacyTier -notin @('full','metrics','none')) { throw "Invalid --privacy-tier: $privacyTier (expected: full, metrics, none)" }
+
+                # Shared arguments, so the four call sites below cannot drift.
+                $scanArgs = @{
+                    PathToScan           = $scanPath
+                    Ignore               = $ignore
+                    Client               = $client
+                    EnvironmentName      = $environmentName
+                    Registry             = $registry
+                    GlogToken            = $glogToken
+                    WithSbom             = $withSbom
+                    SbomOnly             = $sbomOnly
+                    SbomMode             = $sbomMode
+                    SclUuid              = $sclUuid
+                    ForceInventory       = $forceInventoryFlag
+                    ApiUrl               = $apiUrl
+                    SupplyChainEnabled   = $supplyChainEnabled
+                    SupplyChainPolicy    = $supplyChainPolicy
+                    SupplyChainOffline   = $supplyChainOffline
+                    SupplyChainCacheOnly = $supplyChainCacheOnly
+                    SupplyChainFailOn    = $supplyChainFailOn
+                    SupplyChainFormat    = $supplyChainFormat
+                }
+
+                # Every scanner but the resolver runs offline: the resolver is
+                # the only stage that talks to the server, in the passes below.
                 foreach ($lang in $languages) {
+                    if ($lang -eq 'resolver') { continue }
                     Write-Output "Analyzing language: $lang"
-                    if ($privacyTier -notin @('full','metrics','none')) { throw "Invalid --privacy-tier: $privacyTier (expected: full, metrics, none)" }
-                    Invoke-ScanLang -Lang $lang -PathToScan $scanPath -Ignore $ignore -Client $client -EnvironmentName $environmentName -Registry $registry -SarifFormatType $sarifFormatType -GlogToken $glogToken -ResolverUpload $resolverUpload -WithSbom $withSbom -SbomOnly $sbomOnly -SbomMode $sbomMode -SclUuid $sclUuid -ForceInventory $forceInventoryFlag -PrivacyTier $privacyTier -ApiUrl $apiUrl
+                    Invoke-ScanLang @scanArgs -Lang $lang -SarifFormatType $sarifFormatType -ResolverUpload 'false' -PrivacyTier $privacyTier
+                }
+
+                # Resolver passes. When the platform (committed / native SARIF
+                # UI) needs a different structure than the Glog server, the
+                # resolver runs twice:
+                #   1. server format, with upload  -> what the server ingests
+                #   2. platform format, no upload  -> what stays in .glog/
+                if ($serverSarifFormatType -and $serverSarifFormatType -ne $sarifFormatType -and $resolverUpload -eq 'true') {
+                    Write-Output "Resolver pass 1/2: format=$serverSarifFormatType (server upload)"
+                    Invoke-ScanLang @scanArgs -Lang 'resolver' -SarifFormatType $serverSarifFormatType -ResolverUpload 'true' -PrivacyTier $privacyTier
+                    Write-Output "Resolver pass 2/2: format=$sarifFormatType (local/platform artifact)"
+                    # This pass only rewrites the local platform artifact. Keep
+                    # it fully offline so it cannot duplicate or fail an upload
+                    # that already completed.
+                    Invoke-ScanLang @scanArgs -Lang 'resolver' -SarifFormatType $sarifFormatType -ResolverUpload 'false' -PrivacyTier 'none'
+                } else {
+                    Write-Output "Resolver pass: format=$sarifFormatType upload=$resolverUpload"
+                    Invoke-ScanLang @scanArgs -Lang 'resolver' -SarifFormatType $sarifFormatType -ResolverUpload $resolverUpload -PrivacyTier $privacyTier
                 }
 
                 if ($withVex -eq 'true') {
@@ -698,8 +1111,81 @@ try {
                     Invoke-GlogCbom -ScanPath $scanPath -Registry $registry
                     Send-GlogCbom -ScanPath $scanPath -ResolverUpload $resolverUpload -PrivacyTier $privacyTier -ApiUrl $apiUrl -Client $client -EnvironmentName $environmentName -GlogToken $glogToken -SclUuid $sclUuid
                 }
+                if ($withSbom -eq 'true') {
+                    if (Test-GlogSbomQuality -ScanPath $scanPath -MinGrade $sbomMinGrade -ApiUrl $apiUrl -Client $client -EnvironmentName $environmentName -GlogToken $glogToken) {
+                        $sbomGateFailed = $true
+                    }
+                }
+
+                # The resolver container exits 0 even when its uploads failed
+                # (entrypoint.py discards the jar's exit code), so the only
+                # signal is the UPLOAD_FAILED line it writes to
+                # .glog/glog-scan.log. Only a log written by this run counts:
+                # .glog/ is not emptied first, so an older log must not trip it.
+                if ($resolverUpload -eq 'true') {
+                    $resolverLog = Join-Path -Path $scanPath -ChildPath '.glog/glog-scan.log'
+                    if ((Test-Path -LiteralPath $resolverLog) -and
+                        ((Get-Item -LiteralPath $resolverLog).LastWriteTime -gt (Get-Item -LiteralPath $scanStartStamp).LastWriteTime)) {
+                        $failure = [regex]::Match((Get-Content -LiteralPath $resolverLog -Raw), 'UPLOAD_FAILED[^|]*(\| details=\[[^\]]{0,200})?')
+                        if ($failure.Success) {
+                            $uploadFailed = $true
+                            [Console]::Error.WriteLine("ERROR: resolver upload failed: $($failure.Value)")
+                        }
+                    }
+                }
 
                 Persist-ScopedScanArtifacts -ScanPath $scanPath -ProjectPath $projectPath
+                if (-not (Test-ScanArtifacts -ProjectPath $projectPath -SbomOnly $sbomOnly -WithSbom $withSbom -ResolverUpload $resolverUpload)) {
+                    throw 'Glog: expected scan artifacts are missing - failing the step.'
+                }
+                if ($sbomGateFailed) {
+                    [Console]::Error.WriteLine('Exiting 3 because the SBOM quality gate failed (artifacts were still written to .glog/).')
+                    exit 3
+                }
+                if ($uploadFailed -and $failOnUploadError -eq 'true') {
+                    [Console]::Error.WriteLine('Exiting 2 because --fail-on-upload-error is set (SARIF was still written to .glog/).')
+                    exit 2
+                }
+
+                if ($rebuild -eq 'true') {
+                    if (-not $apiUrl -and $client) {
+                        # The resolver image carries its own server URL; the
+                        # host-side rebuild client does not, so derive the
+                        # tenant URL from client and env.
+                        $apiUrl = if ($environmentName -match '^(dev|development)$') { "https://$client.dev.glog.ai" } else { "https://$client.glog.ai" }
+                        Write-Output "Rebuild: --api-url not set, using $apiUrl"
+                    }
+                    if (-not $apiUrl -or -not $glogToken) {
+                        [Console]::Error.WriteLine('Warning: rebuild skipped, it requires GLOG_API_URL (--api-url) and GLOG_TOKEN')
+                    } else {
+                        $python = Get-Command python3 -ErrorAction SilentlyContinue
+                        if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
+                        if (-not $python) {
+                            [Console]::Error.WriteLine('Warning: rebuild skipped, it requires python3 (or python) on PATH.')
+                        } else {
+                            Write-Output 'Running reproducible-build worker for all discovered dependencies'
+                            $rebuildArgs = @('--api-url', $apiUrl, '--token', $glogToken, '--image', $rebuildImage, '--project-path', $projectPath)
+                            if ($sclUuid) { $rebuildArgs += @('--source-code-location', $sclUuid) }
+                            # By default this is all-dependency mode. The legacy
+                            # flags opt into one artifact.
+                            if ($rebuildArtifact) {
+                                if (-not $rebuildPackage -or -not $rebuildVersion -or -not $rebuildEcosystem) {
+                                    [Console]::Error.WriteLine('Single-artifact mode requires --rebuild-package, --rebuild-version and --rebuild-ecosystem')
+                                    exit 1
+                                }
+                                $rebuildArgs += @('--artifact', $rebuildArtifact, '--package-name', $rebuildPackage, '--package-version', $rebuildVersion, '--ecosystem', $rebuildEcosystem)
+                                if ($rebuildManifest) { $rebuildArgs += @('--published-manifest', $rebuildManifest) }
+                            } else {
+                                $rebuildArgs += @('--auto')
+                                if ($rebuildMaxPackages) { $rebuildArgs += @('--max-packages', $rebuildMaxPackages) }
+                            }
+                            & $python.Source (Join-Path -Path $PSScriptRoot -ChildPath 'rebuild_client.py') @rebuildArgs
+                            if ($LASTEXITCODE -ne 0) {
+                                [Console]::Error.WriteLine('Warning: rebuild submission failed; SARIF/SBOM results are unaffected')
+                            }
+                        }
+                    }
+                }
 
                 $glogDir = Join-Path -Path $projectPath -ChildPath '.glog'
                 if (Test-Path -LiteralPath $glogDir -PathType Container) {
@@ -718,5 +1204,8 @@ try {
 } finally {
     if ($tempScanDir -and (Test-Path -LiteralPath $tempScanDir -PathType Container)) {
         Remove-Item -LiteralPath $tempScanDir -Recurse -Force
+    }
+    if ($scanStartStamp -and (Test-Path -LiteralPath $scanStartStamp)) {
+        Remove-Item -LiteralPath $scanStartStamp -Force
     }
 }
