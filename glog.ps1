@@ -50,20 +50,20 @@ function Get-ScanImage([string]$key) {
 # tags, though, all come from images.env. Order matters and is preserved.
 $imageMap = @{
     oss          = @((Get-ScanImage 'GLOG_SCAN_IMAGE_OSS_DEPSCAN'))
-    java         = @((Get-ScanImage 'GLOG_SCAN_IMAGE_JAVA_SPOTBUGS'), (Get-ScanImage 'GLOG_SCAN_IMAGE_JAVA_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_JAVA_OPENGREP_AUTO'))
+    java         = @((Get-ScanImage 'GLOG_SCAN_IMAGE_JAVA_SPOTBUGS'), (Get-ScanImage 'GLOG_SCAN_IMAGE_JAVA_OPENGREP'))
     ruby         = @((Get-ScanImage 'GLOG_SCAN_IMAGE_RUBY_BRAKEMAN'))
-    terraform    = @((Get-ScanImage 'GLOG_SCAN_IMAGE_TERRAFORM_TERRAFORM'), (Get-ScanImage 'GLOG_SCAN_IMAGE_TERRAFORM_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_TERRAFORM_OPENGREP_AUTO'))
+    terraform    = @((Get-ScanImage 'GLOG_SCAN_IMAGE_TERRAFORM_TERRAFORM'), (Get-ScanImage 'GLOG_SCAN_IMAGE_TERRAFORM_OPENGREP'))
     cpp          = @((Get-ScanImage 'GLOG_SCAN_IMAGE_CPP_DEVSKIM'))
-    python       = @((Get-ScanImage 'GLOG_SCAN_IMAGE_PYTHON_BANDIT'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PYTHON_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PYTHON_OPENGREP_AUTO'))
+    python       = @((Get-ScanImage 'GLOG_SCAN_IMAGE_PYTHON_BANDIT'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PYTHON_OPENGREP'))
     secrets      = @((Get-ScanImage 'GLOG_SCAN_IMAGE_SECRETS_GITLEAKS'))
     reachability = @((Get-ScanImage 'GLOG_SCAN_IMAGE_REACHABILITY_REACHABILITY'))
-    csharp       = @((Get-ScanImage 'GLOG_SCAN_IMAGE_CSHARP_OPENGREP_AUTO'), (Get-ScanImage 'GLOG_SCAN_IMAGE_CSHARP_OPENGREP'))
-    php          = @((Get-ScanImage 'GLOG_SCAN_IMAGE_PHP_DEVSKIM'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PHP_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PHP_OPENGREP_AUTO'))
+    csharp       = @((Get-ScanImage 'GLOG_SCAN_IMAGE_CSHARP_OPENGREP'))
+    php          = @((Get-ScanImage 'GLOG_SCAN_IMAGE_PHP_DEVSKIM'), (Get-ScanImage 'GLOG_SCAN_IMAGE_PHP_OPENGREP'))
     kotlin       = @((Get-ScanImage 'GLOG_SCAN_IMAGE_KOTLIN_SPOTBUGS'))
     resolver     = @((Get-ScanImage 'GLOG_SCAN_IMAGE_RESOLVER_GLOG'))
-    javascript   = @((Get-ScanImage 'GLOG_SCAN_IMAGE_JAVASCRIPT_OPENGREP_AUTO'), (Get-ScanImage 'GLOG_SCAN_IMAGE_JAVASCRIPT_OPENGREP'))
+    javascript   = @((Get-ScanImage 'GLOG_SCAN_IMAGE_JAVASCRIPT_OPENGREP'))
     objectscript = @((Get-ScanImage 'GLOG_SCAN_IMAGE_OBJECTSCRIPT_OPENGREP'))
-    go           = @((Get-ScanImage 'GLOG_SCAN_IMAGE_GO_OPENGREP'), (Get-ScanImage 'GLOG_SCAN_IMAGE_GO_OPENGREP_AUTO'))
+    go           = @((Get-ScanImage 'GLOG_SCAN_IMAGE_GO_OPENGREP'))
     # CycloneDX SBOM generator (cdxgen). Writes /app/.glog/sbom.cdx.json which
     # the resolver (running after) uploads to /api/sca/resolver/sbom/.
     sbom         = @((Get-ScanImage 'GLOG_SCAN_IMAGE_SBOM_CDXGEN'))
