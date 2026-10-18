@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# JetBrains IDE settings (per developer)
+.idea/
