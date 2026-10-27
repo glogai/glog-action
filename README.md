@@ -285,6 +285,48 @@ Important notes:
 - `autofix` only assigns issues created in the current run, not previously existing issues
 - if there are no staged changes after the scan, the commit and push steps are skipped
 
+## AI Remediation (quick guide)
+
+Besides handing issues to Copilot (`autofix: true`), Glog can fix findings itself.
+The remediation image from [glog-tools](https://github.com/glogai/glog-tools) runs
+after the resolver, re-triages `.glog/glog-scan.sarif` with the real source in
+view, and applies the recommended fix for each finding that survives. Every edit
+passes a verification gate (syntax check, reported pattern gone, the project's own
+build/test/lint where available, and an LLM review of the diff) and is rolled back
+if it fails. It is run with `gscan.sh` from glog-tools; this action does not
+expose it as an input yet.
+
+```sh
+# build the image once
+./gbuild.sh build --lang remediation
+
+# scan, upload, then remediate (default: patch mode, working tree untouched)
+GLOG_TOKEN=... ./gscan.sh scan --path /path/to/repo --client <client> -u --remediate
+git -C /path/to/repo apply .glog/glog-ai-remediation.patch   # after review
+```
+
+| Mode | Flag | Result |
+|---|---|---|
+| patch (default) | `--remediate` | `.glog/glog-ai-remediation.patch`, tree unchanged |
+| branch | `--remediate-branch` | commit on `glog/remediation/<id>-<hash>`, nothing pushed |
+| local | `--remediate-local` | edits left uncommitted in the tree |
+| triage only | `--remediate-dry-run` | verdicts and report, no edits |
+
+What to look at afterwards, all under `.glog/`:
+
+- `glog-ai-remediation-report.md`: per-finding outcome and the reason for each skip or rollback
+- `glog-ai-remediation.patch` / `glog-ai-rejected.patch`: accepted and rolled-back edits
+- `glog-ai-triaged.sarif` / `glog-ai-false-positive.sarif`: confirmed and demoted findings
+
+With a scan token, model calls go through the Glog server relay (the model is
+picked on the server's AI Providers page and billed to the tenant's AI budget),
+so no provider key is needed on the machine running the scan. Large files are
+fixed in chunks of 4 findings, a rejected chunk keeps the parts the gate still
+accepts, and a fully rejected chunk gets one retry that is told why it was
+rejected. Use `--require-verified` to accept only fixes whose project checks ran
+and passed. The full reference is the "AI remediation" section of the glog-tools
+README.
+
 ## Local CLI
 
 For manual usage of local helper scripts (`glog.sh` for Bash and `glog.ps1` for PowerShell/Windows), see [CLI.md](CLI.md).
