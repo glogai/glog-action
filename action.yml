@@ -175,6 +175,31 @@ inputs:
     required: false
     default: 'ghcr.io/glogai/glog-scan-rebuild-4673'
 
+  remediate:
+    description: "Run AI remediation after the scan: the findings are triaged again with the real source in view and the recommended fixes are applied behind a verification gate (syntax, pattern gone, project build/test/lint where available, LLM review of the diff). With glog-token set the model calls go through the Glog server relay, so no provider key is needed. Outputs land in .glog/glog-ai-* and are uploaded as the 'glog-ai-remediation' workflow artifact. Default is false."
+    required: false
+    default: 'false'
+  remediation-mode:
+    description: "Where accepted fixes go: 'patch' (default, tree untouched, .glog/glog-ai-remediation.patch), 'branch' (local commit on glog/remediation/..., never pushed) or 'local' (uncommitted edits in the workspace for later steps)."
+    required: false
+    default: 'patch'
+  remediate-dry-run:
+    description: "Triage only: verdicts and report, no edits and no patch. Implies remediate. Default is false."
+    required: false
+    default: 'false'
+  remediate-min-severity:
+    description: "Lowest severity handed to the fix agent: LOW (default), MEDIUM, HIGH or CRITICAL."
+    required: false
+    default: ''
+  remediate-max-findings:
+    description: "Cap on the findings handed to the fix agent per run, highest severity first. Empty means no cap."
+    required: false
+    default: ''
+  remediate-require-verified:
+    description: "Accept a fix only when the project's own build/test/lint ran and passed. Default is false."
+    required: false
+    default: 'false'
+
 runs:
   using: "composite"
   steps:
@@ -437,6 +462,14 @@ runs:
           fi
         fi
 
+        if [ "$INPUT_REMEDIATE" = "true" ] || [ "$INPUT_REMEDIATE_DRY_RUN" = "true" ]; then
+          ARGS+=("--remediation-mode" "${INPUT_REMEDIATION_MODE:-patch}")
+          [ "$INPUT_REMEDIATE_DRY_RUN" = "true" ] && ARGS+=("--remediate-dry-run")
+          [ -n "$INPUT_REMEDIATE_MIN_SEVERITY" ] && ARGS+=("--remediate-min-severity" "$INPUT_REMEDIATE_MIN_SEVERITY")
+          [ -n "$INPUT_REMEDIATE_MAX_FINDINGS" ] && ARGS+=("--remediate-max-findings" "$INPUT_REMEDIATE_MAX_FINDINGS")
+          [ "$INPUT_REMEDIATE_REQUIRE_VERIFIED" = "true" ] && ARGS+=("--require-verified")
+        fi
+
         "${CMD[@]}" "${ARGS[@]}"
       env:
         GLOG_VDB_CACHE: ${{ inputs.vdb-cache }}
@@ -482,6 +515,12 @@ runs:
         INPUT_REBUILD_IMAGE: ${{ inputs.rebuild-image }}
         INPUT_REBUILD_MAX_PACKAGES: ${{ inputs.rebuild-max-packages }}
         INPUT_REBUILD_MANIFEST: ${{ inputs.rebuild-manifest }}
+        INPUT_REMEDIATE: ${{ inputs.remediate }}
+        INPUT_REMEDIATION_MODE: ${{ inputs.remediation-mode }}
+        INPUT_REMEDIATE_DRY_RUN: ${{ inputs.remediate-dry-run }}
+        INPUT_REMEDIATE_MIN_SEVERITY: ${{ inputs.remediate-min-severity }}
+        INPUT_REMEDIATE_MAX_FINDINGS: ${{ inputs.remediate-max-findings }}
+        INPUT_REMEDIATE_REQUIRE_VERIFIED: ${{ inputs.remediate-require-verified }}
         # Bulk remediation / profiling knobs. Empty values fall back to the
         # defaults inside glog.sh (bulk on, batch 20, linger 750ms, 8 in flight).
         GLOG_PROFILE: ${{ env.GLOG_PROFILE }}
@@ -525,6 +564,13 @@ runs:
             echo "- VEX: **missing**"
           fi
           echo "- Server upload: $INPUT_ON_PREM_UPLOAD"
+          if [ -f "$GLOG_DIR/glog-ai-remediation-report.md" ]; then
+            echo "- AI remediation: report and patch in the \`glog-ai-remediation\` workflow artifact"
+            echo ""
+            head -n 40 "$GLOG_DIR/glog-ai-remediation-report.md"
+          elif [ "$INPUT_REMEDIATE" = "true" ] || [ "$INPUT_REMEDIATE_DRY_RUN" = "true" ]; then
+            echo "- AI remediation: **no report** (see the Glog Scan step log)"
+          fi
         } >> "$GITHUB_STEP_SUMMARY"
       shell: bash
       env:
@@ -533,6 +579,16 @@ runs:
         INPUT_SBOM_ONLY: ${{ inputs.sbom-only }}
         INPUT_VEX: ${{ inputs.vex }}
         INPUT_ON_PREM_UPLOAD: ${{ inputs.on-prem-upload }}
+        INPUT_REMEDIATE: ${{ inputs.remediate }}
+        INPUT_REMEDIATE_DRY_RUN: ${{ inputs.remediate-dry-run }}
+
+    - name: Upload AI remediation outputs
+      if: ${{ always() && (inputs.remediate == 'true' || inputs.remediate-dry-run == 'true') }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: glog-ai-remediation
+        path: ${{ inputs.path }}/.glog/glog-ai-*
+        if-no-files-found: warn
 
     - name: Git Add report
       run: |

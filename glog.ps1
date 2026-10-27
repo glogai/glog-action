@@ -120,6 +120,18 @@ Options:
   --rebuild-ecosystem NAME  npm, pypi, go, cargo, maven or rubygems (single-artifact mode)
   --rebuild-image IMAGE     Rebuild worker image
   --max-packages N          Cap dependencies verified in all-dependency rebuild mode
+  --remediate               After the scan, triage the findings again and fix them with the
+                            AI remediation image. Default patch mode leaves the tree untouched
+                            and writes .glog/glog-ai-remediation.patch
+  --remediation-mode MODE   patch (default), branch (commit on glog/remediation/..., never
+                            pushed) or local (uncommitted edits). Implies --remediate
+  --remediate-branch        Shorthand for --remediation-mode branch
+  --remediate-local         Shorthand for --remediation-mode local
+  --remediate-dry-run       Triage only: no edits, no patch
+  --remediate-min-severity S  Severity floor: LOW (default), MEDIUM, HIGH or CRITICAL
+  --remediate-max-findings N  Cap the findings handed to the fix agent, highest severity first
+  --require-verified        Accept a fix only when the project's own build/test/lint passed
+  --allow-dirty             Let branch/local mode run on a tree with uncommitted changes
 '@ | Write-Output
 }
 
@@ -553,6 +565,121 @@ $client = ''
 $environmentName = ''
 $registry = 'ghcr.io/glogai/'
 $projectPath = (Get-Location).Path
+# AI remediation (post-resolver triage + fix). Mirrors run_remediation() in
+# glog.sh: the glog-tools remediation image reads .glog/glog-scan.sarif and, in
+# the default patch mode, writes .glog/glog-ai-remediation.patch without
+# touching the tree. With a scan token and no provider key the model calls go
+# through the Glog server relay; otherwise GLOG_LLM_BASE_URL / GLOG_LLM_API_KEY
+# name an OpenAI-compatible endpoint. Never fails the scan.
+function Invoke-GlogRemediation {
+    param([string]$ProjectPath, [string]$Registry, [AllowEmptyString()][string]$GlogToken,
+          [AllowEmptyString()][string]$ApiUrl, [AllowEmptyString()][string]$Client,
+          [AllowEmptyString()][string]$EnvironmentName, [string]$Mode, [AllowEmptyString()][string]$Apply,
+          [AllowEmptyString()][string]$RequireVerified, [AllowEmptyString()][string]$AllowDirty,
+          [AllowEmptyString()][string]$MinSeverity, [AllowEmptyString()][string]$MaxFindings)
+
+    $resolvedPath = Get-AbsolutePath -PathValue $ProjectPath
+    $imageName = Get-ScanImage 'GLOG_SCAN_IMAGE_REMEDIATION_REMEDIATION'
+    if (-not (Test-Path -LiteralPath (Join-Path $resolvedPath '.glog/glog-scan.sarif'))) {
+        [Console]::Error.WriteLine("WARNING: remediation skipped, $resolvedPath/.glog/glog-scan.sarif was not produced.")
+        return
+    }
+    # On Windows the tree reaches the container through a copied volume, so
+    # only the .glog outputs come back: branch and local edits would be lost.
+    if ($env:OS -eq 'Windows_NT' -and $Mode -ne 'patch') {
+        [Console]::Error.WriteLine("WARNING: remediation mode '$Mode' needs a bind mount; on Windows use patch mode.")
+        return
+    }
+
+    $transport = $env:GLOG_LLM_TRANSPORT
+    if (-not $transport) {
+        $transport = if ($GlogToken -and -not $env:GLOG_LLM_API_KEY) { 'server' } else { 'direct' }
+    }
+    $dockerArgs = @('run', '--rm')
+    if ($env:GLOG_IMAGE_REMEDIATION) { $runImage = $env:GLOG_IMAGE_REMEDIATION }
+    else { $runImage = "$Registry$imageName"; $dockerArgs += @('--pull', 'always') }
+
+    switch ($transport) {
+        'server' {
+            if (-not $GlogToken) {
+                [Console]::Error.WriteLine('WARNING: remediation skipped, the server transport needs a scan token (--glogtoken).')
+                return
+            }
+            $api = if ($ApiUrl) { $ApiUrl } else { "$(Get-ResolverServerUrl -Client $Client -EnvironmentName $EnvironmentName)/api" }
+            $relay = if ($env:GLOG_LLM_SERVER_URL) { $env:GLOG_LLM_SERVER_URL } else { $api }
+            $relayHost = ($relay -replace '^[a-zA-Z]+://', '') -replace '[:/].*$', ''
+            if ($relayHost -like '*.localhost' -or $relayHost -eq 'localhost' -or $relayHost -eq '127.0.0.1') {
+                $dockerArgs += @('--network', 'host', '-e', "GLOG_REMEDIATION_HOST_NETWORK=true")
+                if ($relayHost -ne '127.0.0.1') { $dockerArgs += @('--add-host', "${relayHost}:127.0.0.1") }
+            }
+            $dockerArgs += @('-e', "GLOG_LLM_TRANSPORT=server", '-e', "GLOG_API_URL=$api")
+            if ($env:GLOG_LLM_SERVER_URL) { $dockerArgs += @('-e', "GLOG_LLM_SERVER_URL=$($env:GLOG_LLM_SERVER_URL)") }
+        }
+        'direct' {
+            if (-not $env:GLOG_LLM_API_KEY -or -not $env:GLOG_LLM_BASE_URL) {
+                [Console]::Error.WriteLine('WARNING: remediation skipped, it needs a scan token (server relay) or GLOG_LLM_BASE_URL and GLOG_LLM_API_KEY.')
+                return
+            }
+            # Bare -e: docker copies the key from this process's environment.
+            $dockerArgs += @('-e', "GLOG_LLM_TRANSPORT=direct", '-e', 'GLOG_LLM_API_KEY', '-e', "GLOG_LLM_BASE_URL=$($env:GLOG_LLM_BASE_URL)")
+        }
+        default {
+            [Console]::Error.WriteLine("WARNING: remediation skipped, transport '$transport' is not supported here (server or direct).")
+            return
+        }
+    }
+    if ($env:GLOG_LLM_MODEL) { $dockerArgs += @('-e', "GLOG_LLM_MODEL=$($env:GLOG_LLM_MODEL)") }
+
+    $applyLabel = if ($Apply) { $Apply } else { 'true' }
+    Write-Output "AI remediation: mode=$Mode transport=$transport apply=$applyLabel"
+    $dockerArgs += @(
+        '-e', "GLOGSERVICE=$GlogToken",
+        '-e', "GLOG_TOKEN=$GlogToken",
+        '-e', "HOST_UID=$(Get-HostIdValue -Kind uid)",
+        '-e', "HOST_GID=$(Get-HostIdValue -Kind gid)",
+        '-e', "GLOG_IMAGE=$imageName",
+        '-e', "HOST_PROJECT_PATH=$resolvedPath",
+        '-e', "GLOG_REMEDIATION_MODE=$Mode",
+        '-e', "GLOG_REMEDIATION_APPLY=$Apply",
+        '-e', "GLOG_REMEDIATION_REQUIRE_VERIFIED=$RequireVerified",
+        '-e', "GLOG_REMEDIATION_ALLOW_DIRTY=$AllowDirty",
+        '-e', "GLOG_REMEDIATION_MIN_SEVERITY=$MinSeverity",
+        '-e', "GLOG_REMEDIATION_MAX_FINDINGS=$MaxFindings",
+        '-e', ("GLOG_REMEDIATION_CHUNK_SIZE=" + $(if ($env:GLOG_REMEDIATION_CHUNK_SIZE) { $env:GLOG_REMEDIATION_CHUNK_SIZE } else { '' })),
+        '-e', ("GLOG_REMEDIATION_SALVAGE_PARTIAL=" + $(if ($env:GLOG_REMEDIATION_SALVAGE_PARTIAL) { $env:GLOG_REMEDIATION_SALVAGE_PARTIAL } else { '' })),
+        '-e', ("GLOG_REMEDIATION_RETRY_ON_REVERT=" + $(if ($env:GLOG_REMEDIATION_RETRY_ON_REVERT) { $env:GLOG_REMEDIATION_RETRY_ON_REVERT } else { '' }))
+    )
+
+    $volName = $null
+    try {
+        $mount = "${resolvedPath}:/app"
+        if ($env:OS -eq 'Windows_NT') {
+            $volName = "glog-src-$([System.Guid]::NewGuid().ToString('N'))"
+            & docker volume create $volName | Out-Null
+            & docker run --rm -v "${volName}:/app" -v "${resolvedPath}:/src:ro" alpine sh -c "cp -r /src/. /app/"
+            $mount = "${volName}:/app"
+        }
+        $dockerArgs += @('-v', $mount, $runImage)
+        & docker @dockerArgs
+        $remediationExit = $LASTEXITCODE
+        if ($volName) {
+            & docker run --rm -v "${volName}:/app" -v "${resolvedPath}/.glog:/out" alpine sh -c "cp -r /app/.glog/. /out/"
+        }
+        if ($remediationExit -ne 0) {
+            [Console]::Error.WriteLine("WARNING: AI remediation failed; see $resolvedPath/.glog/glog-ai-remediation-report.md. Scan results are unaffected.")
+            return
+        }
+    }
+    finally {
+        if ($volName) { & docker volume rm $volName | Out-Null }
+    }
+    $patch = Join-Path $resolvedPath '.glog/glog-ai-remediation.patch'
+    if ((Test-Path -LiteralPath $patch) -and (Get-Item -LiteralPath $patch).Length -gt 0) {
+        Write-Output "AI remediation patch: $patch (review, then git apply)"
+    }
+    Write-Output "AI remediation report: $resolvedPath/.glog/glog-ai-remediation-report.md"
+}
+
 function Invoke-GlogCbom {
     param([string]$ScanPath, [string]$Registry)
     $image = "${Registry}$(Get-ScanImage 'GLOG_SCAN_IMAGE_SBOM_CDXGEN')"
@@ -741,6 +868,13 @@ $rebuildManifest = if ($env:REBUILD_MANIFEST) { $env:REBUILD_MANIFEST } else { '
 $rebuildPackage = if ($env:REBUILD_PACKAGE) { $env:REBUILD_PACKAGE } else { '' }
 $rebuildVersion = if ($env:REBUILD_VERSION) { $env:REBUILD_VERSION } else { '' }
 $rebuildEcosystem = if ($env:REBUILD_ECOSYSTEM) { $env:REBUILD_ECOSYSTEM } else { '' }
+$remediate = 'false'
+$remediationMode = if ($env:GLOG_REMEDIATION_MODE) { $env:GLOG_REMEDIATION_MODE } else { 'patch' }
+$remediationApply = if ($env:GLOG_REMEDIATION_APPLY) { $env:GLOG_REMEDIATION_APPLY } else { '' }
+$remediationRequireVerified = if ($env:GLOG_REMEDIATION_REQUIRE_VERIFIED) { $env:GLOG_REMEDIATION_REQUIRE_VERIFIED } else { '' }
+$remediationAllowDirty = if ($env:GLOG_REMEDIATION_ALLOW_DIRTY) { $env:GLOG_REMEDIATION_ALLOW_DIRTY } else { '' }
+$remediationMinSeverity = if ($env:GLOG_REMEDIATION_MIN_SEVERITY) { $env:GLOG_REMEDIATION_MIN_SEVERITY } else { '' }
+$remediationMaxFindings = if ($env:GLOG_REMEDIATION_MAX_FINDINGS) { $env:GLOG_REMEDIATION_MAX_FINDINGS } else { '' }
 $rebuildImage = if ($env:REBUILD_IMAGE) { $env:REBUILD_IMAGE } else { "ghcr.io/glogai/$(Get-ScanImage 'GLOG_SCAN_IMAGE_REBUILD_REBUILD')" }
 # Bounded all-dependency mode: every package is downloaded and hashed, so an
 # unbounded run would make the scan far too slow on large lockfiles.
@@ -984,6 +1118,60 @@ while ($index -lt $scriptArgs.Count) {
             $index += 2
             continue
         }
+        '--remediate' {
+            $remediate = 'true'
+            $index++
+            continue
+        }
+        '--remediation-mode' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --remediation-mode' }
+            $remediationMode = $scriptArgs[$index + 1]
+            $remediate = 'true'
+            $index += 2
+            continue
+        }
+        '--remediate-branch' {
+            $remediationMode = 'branch'
+            $remediate = 'true'
+            $index++
+            continue
+        }
+        '--remediate-local' {
+            $remediationMode = 'local'
+            $remediate = 'true'
+            $index++
+            continue
+        }
+        '--remediate-dry-run' {
+            $remediationApply = 'false'
+            $remediate = 'true'
+            $index++
+            continue
+        }
+        '--remediate-min-severity' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --remediate-min-severity' }
+            $remediationMinSeverity = $scriptArgs[$index + 1]
+            $remediate = 'true'
+            $index += 2
+            continue
+        }
+        '--remediate-max-findings' {
+            if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --remediate-max-findings' }
+            $remediationMaxFindings = $scriptArgs[$index + 1]
+            $remediate = 'true'
+            $index += 2
+            continue
+        }
+        '--require-verified' {
+            $remediationRequireVerified = 'true'
+            $index++
+            continue
+        }
+        '--allow-dirty' {
+            $remediationAllowDirty = 'true'
+            $index++
+            continue
+        }
         '--max-packages' {
             if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --max-packages' }
             $rebuildMaxPackages = $scriptArgs[$index + 1]
@@ -1099,6 +1287,7 @@ try {
                 }
 
                 if ($privacyTier -notin @('full','metrics','none')) { throw "Invalid --privacy-tier: $privacyTier (expected: full, metrics, none)" }
+                if ($remediationMode -notin @('patch','branch','local')) { throw "Invalid --remediation-mode: $remediationMode (expected: patch, branch, local)" }
 
                 # Shared arguments, so the four call sites below cannot drift.
                 $scanArgs = @{
@@ -1182,6 +1371,11 @@ try {
                 if (-not (Test-ScanArtifacts -ProjectPath $projectPath -SbomOnly $sbomOnly -WithSbom $withSbom -ResolverUpload $resolverUpload)) {
                     throw 'Glog: expected scan artifacts are missing - failing the step.'
                 }
+                # On the real tree, not a scoped copy: the fixes have to land
+                # where the developer will apply them.
+                if ($remediate -eq 'true') {
+                    Invoke-GlogRemediation -ProjectPath $projectPath -Registry $registry -GlogToken $glogToken -ApiUrl $apiUrl -Client $client -EnvironmentName $environmentName -Mode $remediationMode -Apply $remediationApply -RequireVerified $remediationRequireVerified -AllowDirty $remediationAllowDirty -MinSeverity $remediationMinSeverity -MaxFindings $remediationMaxFindings
+                }
                 if ($sbomGateFailed) {
                     [Console]::Error.WriteLine('Exiting 3 because the SBOM quality gate failed (artifacts were still written to .glog/).')
                     exit 3
@@ -1233,7 +1427,7 @@ try {
 
                 $glogDir = Join-Path -Path $projectPath -ChildPath '.glog'
                 if (Test-Path -LiteralPath $glogDir -PathType Container) {
-                    $keepPatterns = @('glog-scan.sarif', '*.cdx.json', '*.vdr.json', 'sbom*.json')
+                    $keepPatterns = @('glog-scan.sarif', '*.cdx.json', '*.vdr.json', 'sbom*.json', 'glog-ai-*')
                     Get-ChildItem -LiteralPath $glogDir -Force |
                         Where-Object {
                             $name = $_.Name

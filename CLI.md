@@ -313,6 +313,40 @@ compares each job asynchronously.
 ---
 
 
+## AI remediation options
+
+`--remediate` runs the glog-tools remediation image after the resolver, on the
+project path (not a `--files` scoped copy). It reads `.glog/glog-scan.sarif`,
+triages the findings again and applies the recommended fixes behind a
+verification gate. A failed remediation run warns and never fails the scan.
+
+| Option | Meaning |
+|---|---|
+| `--remediate` | turn remediation on (patch mode) |
+| `--remediation-mode patch\|branch\|local` | `patch` (default) leaves the tree untouched and writes `.glog/glog-ai-remediation.patch`; `branch` commits on `glog/remediation/...` and never pushes; `local` leaves the edits uncommitted |
+| `--remediate-branch` / `--remediate-local` | shorthands for the two modes |
+| `--remediate-dry-run` | triage only, no edits |
+| `--remediate-min-severity S` | `LOW` (default), `MEDIUM`, `HIGH` or `CRITICAL` |
+| `--remediate-max-findings N` | cap per run, highest severity first |
+| `--require-verified` | accept a fix only when the project's own build/test/lint passed |
+| `--allow-dirty` | let `branch` / `local` mode run on a tree with uncommitted changes |
+
+Transport: with a scan token and no `GLOG_LLM_API_KEY`, model calls go through
+the Glog server relay at `<server>/api/remediation/llm`, where the server is
+`--api-url` or the one derived from `--client` / `--env` (a `*.localhost` server
+is reached on the host network). Without a token, set `GLOG_LLM_BASE_URL`,
+`GLOG_LLM_API_KEY` and optionally `GLOG_LLM_MODEL` for an OpenAI-compatible
+endpoint; the key is passed to the container from the environment and never
+appears on the docker command line. `GLOG_IMAGE_REMEDIATION` runs a local image
+instead of the published one. `GLOG_REMEDIATION_CHUNK_SIZE`,
+`GLOG_REMEDIATION_SALVAGE_PARTIAL` and `GLOG_REMEDIATION_RETRY_ON_REVERT` are
+forwarded when set.
+
+```bash
+GLOG_TOKEN=... ./glog.sh scan --path /path/to/repo --client acme -u --remediate
+git -C /path/to/repo apply .glog/glog-ai-remediation.patch   # after review
+```
+
 ## Bulk remediation env vars
 
 These are read from the environment (no CLI flags) and forwarded into the scanner

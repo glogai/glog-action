@@ -218,6 +218,110 @@ PY
   fi
 }
 
+# AI remediation (post-resolver triage + fix). Runs the glog-tools remediation
+# image over the resolver's .glog/glog-scan.sarif, after the scan artifacts are
+# final. It is the one stage that may write to the source tree, so it is opt-in
+# and defaults to patch mode: the tree is left byte-identical and the accepted
+# fixes land in .glog/glog-ai-remediation.patch. The image never pushes.
+#
+# Transport: with a scan token and no provider key the model calls go through
+# the Glog server relay (<server>/api/remediation/llm), which picks the model
+# and bills the tenant's AI budget, so a CI runner needs no provider key.
+# Otherwise GLOG_LLM_BASE_URL / GLOG_LLM_MODEL / GLOG_LLM_API_KEY name an
+# OpenAI-compatible endpoint directly. The OpenCode transport is gscan.sh only:
+# it needs an OpenCode credential store on the host.
+run_remediation() {
+  local path="$1" registry="$2"
+  local image_name="${GLOG_SCAN_IMAGE_REMEDIATION_REMEDIATION}"
+  local run_image pull_args=()
+  if [[ -n "${GLOG_IMAGE_REMEDIATION:-}" ]]; then
+    run_image="$GLOG_IMAGE_REMEDIATION"
+  else
+    run_image="${registry}${image_name}"
+    pull_args=(--pull always)
+  fi
+  if [[ ! -s "$path/.glog/glog-scan.sarif" ]]; then
+    echo "WARNING: remediation skipped, $path/.glog/glog-scan.sarif was not produced." >&2
+    return 0
+  fi
+
+  local transport="${GLOG_LLM_TRANSPORT:-}"
+  if [[ -z "$transport" ]]; then
+    if [[ -n "${GLOG_TOKEN:-}" && -z "${GLOG_LLM_API_KEY:-}" ]]; then
+      transport=server
+    else
+      transport=direct
+    fi
+  fi
+  local args=()
+  case "$transport" in
+    server)
+      if [[ -z "${GLOG_TOKEN:-}" ]]; then
+        echo "WARNING: remediation skipped, the server transport needs a scan token (--glogtoken)." >&2
+        return 0
+      fi
+      # The relay lives on the same server the resolver uploads to, so it is
+      # derived the same way unless --api-url or GLOG_LLM_SERVER_URL names it.
+      local api="${GLOG_API_URL:-$(resolver_server_url)/api}"
+      local relay_host
+      relay_host=$(printf '%s' "${GLOG_LLM_SERVER_URL:-$api}" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')
+      if [[ "$relay_host" == *.localhost || "$relay_host" == "localhost" || "$relay_host" == "127.0.0.1" ]]; then
+        # Same rule as gscan.sh: a local dev server binds loopback only, and on
+        # the host network the image's OpenCode server is password-protected.
+        args+=(--network host -e GLOG_REMEDIATION_HOST_NETWORK=true)
+        [[ "$relay_host" != "127.0.0.1" ]] && args+=(--add-host "$relay_host:127.0.0.1")
+      fi
+      args+=(-e GLOG_LLM_TRANSPORT=server -e GLOG_API_URL="$api")
+      [[ -n "${GLOG_LLM_SERVER_URL:-}" ]] && args+=(-e GLOG_LLM_SERVER_URL="$GLOG_LLM_SERVER_URL")
+      ;;
+    direct)
+      if [[ -z "${GLOG_LLM_API_KEY:-}" || -z "${GLOG_LLM_BASE_URL:-}" ]]; then
+        echo "WARNING: remediation skipped, it needs a scan token (server relay) or GLOG_LLM_BASE_URL and GLOG_LLM_API_KEY." >&2
+        return 0
+      fi
+      # Bare -e: the key is copied from this shell's environment and never
+      # appears in the docker argv.
+      export GLOG_LLM_API_KEY
+      args+=(-e GLOG_LLM_TRANSPORT=direct -e GLOG_LLM_API_KEY -e GLOG_LLM_BASE_URL="$GLOG_LLM_BASE_URL")
+      ;;
+    *)
+      echo "WARNING: remediation skipped, transport '$transport' is not supported here (server or direct)." >&2
+      return 0
+      ;;
+  esac
+  [[ -n "${GLOG_LLM_MODEL:-}" ]] && args+=(-e GLOG_LLM_MODEL="$GLOG_LLM_MODEL")
+
+  echo "AI remediation: mode=${GLOG_REMEDIATION_MODE:-patch} transport=$transport apply=${GLOG_REMEDIATION_APPLY:-true}"
+  export GLOGSERVICE="${GLOG_TOKEN:-}"
+  export GLOG_TOKEN
+  if ! docker run "${pull_args[@]}" --rm \
+      "${args[@]}" \
+      -e GLOGSERVICE \
+      -e GLOG_TOKEN \
+      -e HOST_UID="$(id -u)" \
+      -e HOST_GID="$(id -g)" \
+      -e GLOG_IMAGE="$image_name" \
+      -e HOST_PROJECT_PATH="$path" \
+      -e GLOG_REMEDIATION_MODE="${GLOG_REMEDIATION_MODE:-patch}" \
+      -e GLOG_REMEDIATION_APPLY="${GLOG_REMEDIATION_APPLY:-}" \
+      -e GLOG_REMEDIATION_REQUIRE_VERIFIED="${GLOG_REMEDIATION_REQUIRE_VERIFIED:-}" \
+      -e GLOG_REMEDIATION_ALLOW_DIRTY="${GLOG_REMEDIATION_ALLOW_DIRTY:-}" \
+      -e GLOG_REMEDIATION_MIN_SEVERITY="${GLOG_REMEDIATION_MIN_SEVERITY:-}" \
+      -e GLOG_REMEDIATION_MAX_FINDINGS="${GLOG_REMEDIATION_MAX_FINDINGS:-}" \
+      -e GLOG_REMEDIATION_CHUNK_SIZE="${GLOG_REMEDIATION_CHUNK_SIZE:-}" \
+      -e GLOG_REMEDIATION_SALVAGE_PARTIAL="${GLOG_REMEDIATION_SALVAGE_PARTIAL:-}" \
+      -e GLOG_REMEDIATION_RETRY_ON_REVERT="${GLOG_REMEDIATION_RETRY_ON_REVERT:-}" \
+      -v "$path":/app \
+      "$run_image"; then
+    echo "WARNING: AI remediation failed; see $path/.glog/glog-ai-remediation-report.md. Scan results are unaffected." >&2
+    return 0
+  fi
+  if [[ -s "$path/.glog/glog-ai-remediation.patch" ]]; then
+    echo "AI remediation patch: $path/.glog/glog-ai-remediation.patch (review, then git apply)"
+  fi
+  echo "AI remediation report: $path/.glog/glog-ai-remediation-report.md"
+}
+
 usage() {
   cat <<'EOF'
 Glog.AI Scanner CLI
@@ -267,6 +371,18 @@ Options:
    --rebuild-ecosystem NAME     npm, pypi, go, cargo, maven or rubygems (single-artifact mode)
    --rebuild-image IMAGE        Rebuild worker image
    --max-packages N             Cap dependencies verified in all-dependency rebuild mode
+  --remediate               After the scan, triage the findings again and fix them with the
+                            AI remediation image. Default patch mode leaves the tree untouched
+                            and writes .glog/glog-ai-remediation.patch
+  --remediation-mode MODE   patch (default), branch (commit on glog/remediation/..., never
+                            pushed) or local (uncommitted edits). Implies --remediate
+  --remediate-branch        Shorthand for --remediation-mode branch
+  --remediate-local         Shorthand for --remediation-mode local
+  --remediate-dry-run       Triage only: no edits, no patch
+  --remediate-min-severity S  Severity floor: LOW (default), MEDIUM, HIGH or CRITICAL
+  --remediate-max-findings N  Cap the findings handed to the fix agent, highest severity first
+  --require-verified        Accept a fix only when the project's own build/test/lint passed
+  --allow-dirty             Let branch/local mode run on a tree with uncommitted changes
 
 
 EOF
@@ -701,6 +817,13 @@ REBUILD_IMAGE="${REBUILD_IMAGE:-ghcr.io/glogai/${GLOG_SCAN_IMAGE_REBUILD_REBUILD
 # Bounded all-dependency mode: every package is downloaded and hashed, so an
 # unbounded run would make the scan far too slow on large lockfiles.
 REBUILD_MAX_PACKAGES="${REBUILD_MAX_PACKAGES:-}"
+REMEDIATE="${REMEDIATE:-false}"
+GLOG_REMEDIATION_MODE="${GLOG_REMEDIATION_MODE:-patch}"
+GLOG_REMEDIATION_APPLY="${GLOG_REMEDIATION_APPLY:-}"
+GLOG_REMEDIATION_REQUIRE_VERIFIED="${GLOG_REMEDIATION_REQUIRE_VERIFIED:-}"
+GLOG_REMEDIATION_ALLOW_DIRTY="${GLOG_REMEDIATION_ALLOW_DIRTY:-}"
+GLOG_REMEDIATION_MIN_SEVERITY="${GLOG_REMEDIATION_MIN_SEVERITY:-}"
+GLOG_REMEDIATION_MAX_FINDINGS="${GLOG_REMEDIATION_MAX_FINDINGS:-}"
 
 
 while [[ $# -gt 0 ]]; do
@@ -752,6 +875,15 @@ while [[ $# -gt 0 ]]; do
      --rebuild-ecosystem) REBUILD_ECOSYSTEM="$2"; shift 2 ;;
      --rebuild-image) REBUILD_IMAGE="$2"; shift 2 ;;
      --max-packages|--rebuild-max-packages) REBUILD_MAX_PACKAGES="$2"; shift 2 ;;
+    --remediate) REMEDIATE=true; shift ;;
+    --remediation-mode) GLOG_REMEDIATION_MODE="$2"; REMEDIATE=true; shift 2 ;;
+    --remediate-branch) GLOG_REMEDIATION_MODE=branch; REMEDIATE=true; shift ;;
+    --remediate-local) GLOG_REMEDIATION_MODE=local; REMEDIATE=true; shift ;;
+    --remediate-dry-run) GLOG_REMEDIATION_APPLY=false; REMEDIATE=true; shift ;;
+    --remediate-min-severity) GLOG_REMEDIATION_MIN_SEVERITY="$2"; REMEDIATE=true; shift 2 ;;
+    --remediate-max-findings) GLOG_REMEDIATION_MAX_FINDINGS="$2"; REMEDIATE=true; shift 2 ;;
+    --require-verified) GLOG_REMEDIATION_REQUIRE_VERIFIED=true; shift ;;
+    --allow-dirty) GLOG_REMEDIATION_ALLOW_DIRTY=true; shift ;;
      -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -797,6 +929,11 @@ fi
 if [[ ${#COMMANDS[@]} -eq 0 ]]; then
   usage; exit 1
 fi
+
+case "$GLOG_REMEDIATION_MODE" in
+  patch|branch|local) ;;
+  *) echo "Invalid --remediation-mode: $GLOG_REMEDIATION_MODE (expected: patch, branch, local)" >&2; exit 1 ;;
+esac
 
 if [[ -n "$SUPPLY_CHAIN_FAIL_ON" && ! "$SUPPLY_CHAIN_FAIL_ON" =~ ^(INFO|LOW|MEDIUM|HIGH|CRITICAL)$ ]]; then
   echo "Invalid --supply-chain-fail-on: $SUPPLY_CHAIN_FAIL_ON (expected INFO, LOW, MEDIUM, HIGH or CRITICAL)" >&2
@@ -850,7 +987,12 @@ for cmd in "${COMMANDS[@]}"; do
 
       # Every image this run will use, resolved before the first container
       # starts. Here rather than earlier because LANGUAGES is only final now.
-      verify_images "$REGISTRY" "${LANGUAGES[@]}"
+      if [[ "$REMEDIATE" == "true" && -z "${GLOG_IMAGE_REMEDIATION:-}" ]]; then
+        IMAGE_MAP[remediation]="$GLOG_SCAN_IMAGE_REMEDIATION_REMEDIATION"
+        verify_images "$REGISTRY" "${LANGUAGES[@]}" remediation
+      else
+        verify_images "$REGISTRY" "${LANGUAGES[@]}"
+      fi
 
       # Resolver passes. When the platform (committed / native SARIF UI) needs a
       # different structure than the Glog server, the resolver runs twice:
@@ -899,6 +1041,11 @@ for cmd in "${COMMANDS[@]}"; do
 
        persist_scoped_scan_artifacts "$SCAN_PATH" "$PROJECT_PATH"
        verify_scan_artifacts "$PROJECT_PATH"
+       # On the real tree, not a scoped copy: the fixes have to land where the
+       # developer will apply them, and the persisted SARIF is there too.
+       if [[ "$REMEDIATE" == "true" ]]; then
+         run_remediation "$PROJECT_PATH" "$REGISTRY"
+       fi
        if [[ "$SBOM_GATE_FAILED" == "true" ]]; then
          echo "Exiting 3 because the SBOM quality gate failed (artifacts were still written to .glog/)." >&2
          exit 3
