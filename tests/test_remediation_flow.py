@@ -56,6 +56,9 @@ class _RemediationFlow:
         raise NotImplementedError
 
     def run_driver(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+        return self.run_command("scan", "--path", str(self.project), "--lang", "kotlin", *args, env=env)
+
+    def run_command(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
         full_env = dict(os.environ)
         for name in LEAKED:
             full_env.pop(name, None)
@@ -64,7 +67,7 @@ class _RemediationFlow:
         full_env["GLOG_SKIP_IMAGE_VERIFY"] = "true"
         if env:
             full_env.update(env)
-        return subprocess.run(self.command("scan", "--path", str(self.project), "--lang", "kotlin", *args),
+        return subprocess.run(self.command(*args),
                               cwd=str(self.root), env=full_env, capture_output=True, text=True, timeout=300)
 
     def calls(self) -> list[dict]:
@@ -154,6 +157,28 @@ class _RemediationFlow:
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Invalid --remediation-mode", result.stdout + result.stderr)
         self.assertEqual(self.calls(), [])
+
+    def test_remediate_command_runs_only_the_remediation_image(self) -> None:
+        (self.project / ".glog").mkdir()
+        (self.project / ".glog" / "glog-scan.sarif").write_text('{"runs":[]}')
+        result = self.run_command("remediate", "--path", str(self.project), "--client", "acme",
+                                  "--remediate-max-findings", "5", env={"GLOG_TOKEN": "stub-token"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([c["image"] for c in self.calls()], [REMEDIATION_IMAGE])
+        self.assertEqual(self.remediation_calls()[0]["env"]["GLOG_REMEDIATION_MAX_FINDINGS"], "5")
+
+    def test_remediate_command_without_a_scan_result_is_skipped(self) -> None:
+        result = self.run_command("remediate", "--path", str(self.project), "--client", "acme",
+                                  env={"GLOG_TOKEN": "stub-token"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertIn("remediation skipped", result.stderr)
+
+    def test_scan_remediate_with_the_flag_runs_remediation_once(self) -> None:
+        result = self.run_command("scan", "remediate", "--path", str(self.project), "--lang", "kotlin",
+                                  "--remediate", "--client", "acme", env={"GLOG_TOKEN": "stub-token"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.remediation_calls()), 1)
 
 
 class GlogShRemediationTests(_RemediationFlow, unittest.TestCase):

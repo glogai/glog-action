@@ -74,7 +74,10 @@ $imageMap = @{
 function Show-Usage {
     @'
 Glog.AI Scanner CLI
-Usage: glog.ps1 [clean] [scan] [options]
+Usage: glog.ps1 [clean] [scan] [remediate] [options]
+
+  remediate                 Run only the AI remediation step over the .glog/glog-scan.sarif
+                            an earlier scan left (same options as --remediate)
 
 Options:
   --path PATH               Project path to scan (default: current dir)
@@ -897,6 +900,11 @@ while ($index -lt $scriptArgs.Count) {
             $index++
             continue
         }
+        'remediate' {
+            [void]$commands.Add('remediate')
+            $index++
+            continue
+        }
         '--path' {
             if ($index + 1 -ge $scriptArgs.Count) { throw 'Missing value for --path' }
             $projectPath = $scriptArgs[$index + 1]
@@ -1230,6 +1238,14 @@ try {
 
     foreach ($command in $commands) {
         switch ($command) {
+            'remediate' {
+                # Remediation on its own, over the .glog/glog-scan.sarif an
+                # earlier scan left. "scan --remediate" already runs it.
+                if (-not ($commands -contains 'scan' -and $remediate -eq 'true')) {
+                    if ($remediationMode -notin @('patch','branch','local')) { throw "Invalid --remediation-mode: $remediationMode (expected: patch, branch, local)" }
+                    Invoke-GlogRemediation -ProjectPath $projectPath -Registry $registry -GlogToken $glogToken -ApiUrl $apiUrl -Client $client -EnvironmentName $environmentName -Mode $remediationMode -Apply $remediationApply -RequireVerified $remediationRequireVerified -AllowDirty $remediationAllowDirty -MinSeverity $remediationMinSeverity -MaxFindings $remediationMaxFindings
+                }
+            }
             'clean' {
                 Write-Output "Cleaning .glog directory in $projectPath..."
                 $glogDir = Join-Path -Path $projectPath -ChildPath '.glog'

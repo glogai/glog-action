@@ -347,6 +347,16 @@ GLOG_TOKEN=... ./glog.sh scan --path /path/to/repo --client acme -u --remediate
 git -C /path/to/repo apply .glog/glog-ai-remediation.patch   # after review
 ```
 
+To remediate the result of an earlier scan without scanning again, use the
+`remediate` command with the same options:
+
+```bash
+GLOG_TOKEN=... ./glog.sh remediate --path /path/to/repo --client acme --remediate-max-findings 5
+```
+
+[glog-acp](https://github.com/glogai/glog-acp) uses both forms to run Glog from
+the chat panel of an ACP editor (JetBrains IDEs, Zed).
+
 ## Bulk remediation env vars
 
 These are read from the environment (no CLI flags) and forwarded into the scanner

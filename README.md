@@ -334,7 +334,10 @@ What to look at afterwards, all under `.glog/` and in the artifact:
 - `glog-ai-triaged.sarif` / `glog-ai-false-positive.sarif`: confirmed and demoted findings
 
 The same step runs locally with `glog.sh scan ... --remediate` or
-`glog.ps1 scan ... --remediate` (see [CLI.md](CLI.md)). Large files are fixed in
+`glog.ps1 scan ... --remediate`, and on an earlier scan's result with
+`glog.sh remediate ...` (see [CLI.md](CLI.md)). In PyCharm, IntelliJ IDEA and
+other ACP editors it runs from the chat panel through
+[glog-acp](https://github.com/glogai/glog-acp). Large files are fixed in
 chunks of 4 findings, a rejected chunk keeps the parts the gate still accepts,
 and a fully rejected chunk gets one retry that is told why it was rejected. The
 full reference is the "AI remediation" section of the glog-tools README.

@@ -325,7 +325,10 @@ run_remediation() {
 usage() {
   cat <<'EOF'
 Glog.AI Scanner CLI
-Usage: glog.sh [clean] [scan] [options]
+Usage: glog.sh [clean] [scan] [remediate] [options]
+
+  remediate                 Run only the AI remediation step over the .glog/glog-scan.sarif
+                            an earlier scan left (same options as --remediate)
 
 Options:
   --path PATH               Project path to scan (default: current dir)
@@ -828,7 +831,7 @@ GLOG_REMEDIATION_MAX_FINDINGS="${GLOG_REMEDIATION_MAX_FINDINGS:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    clean|scan) COMMANDS+=("$1"); shift ;;
+    clean|scan|remediate) COMMANDS+=("$1"); shift ;;
     --path) PROJECT_PATH="$2"; shift 2 ;;
     --files) IFS=',' read -r -a FILES <<< "$2"; shift 2 ;;
     --lang)
@@ -942,6 +945,14 @@ fi
 
 for cmd in "${COMMANDS[@]}"; do
   case "$cmd" in
+    remediate)
+      # Remediation on its own, over the .glog/glog-scan.sarif an earlier scan
+      # left. "scan --remediate" already runs it, so skip it after a scan here.
+      if [[ " ${COMMANDS[*]} " == *" scan "* && "$REMEDIATE" == "true" ]]; then
+        continue
+      fi
+      run_remediation "$(cd "$PROJECT_PATH" && pwd)" "$REGISTRY"
+      ;;
     clean)
       echo "Cleaning .glog directory in $PROJECT_PATH..."
       if [ -d "$PROJECT_PATH/.glog" ]; then
