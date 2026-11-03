@@ -537,6 +537,7 @@ runs:
         SUPPLY_CHAIN_CACHE_ONLY: ${{ inputs.supply-chain-cache-only }}
         SUPPLY_CHAIN_FAIL_ON: ${{ inputs.supply-chain-fail-on }}
         SUPPLY_CHAIN_FORMAT: ${{ inputs.supply-chain-format }}
+      shell: bash
 
 
     - name: Glog artifact summary
